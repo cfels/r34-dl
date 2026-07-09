@@ -1,0 +1,32 @@
+name: Auto add-header to releases
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  add-header:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update Release Body
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const releaseId = context.payload.release.id;
+            const currentBody = context.payload.release.body || "";
+            const header = '<div align="center">\n\n## 💕🌸💕 R34-DL // Change\'s 💕🌸💕\n\n</div>\n\n';
+            
+            if (currentBody.includes("R34-DL // Change's")) {
+              return;
+            }
+
+            await github.rest.repos.updateRelease({
+              owner,
+              repo,
+              release_id: releaseId,
+              body: header + currentBody
+            });
