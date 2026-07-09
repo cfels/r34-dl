@@ -30,17 +30,17 @@ Options:
 
 ### Obatining API key
 Here's how to get one
-go to [rule34.xxx Account Page](https://rule34.xxx/index.php?page=account&s=home) to register an acc or login if you have one
-then go to `Options` and find section called `API Access Credentials` here's ur api key! copy the whole block!
-then type this command into your terminal 
+go to [rule34.xxx Account Page](https://rule34.xxx/index.php?page=account&s=home) to register an acc or login if you have an account already,
+then go to `Options` and find section called `API Access Credentials` here's ur api key, copy the whole block!<br>
+then type this command into your terminal:
 ```fish
 r34-dl -apik
 ```
-u will see prompt like this and paste full API key block into it
+u will see prompt like this so just paste full API key block into it
 ```
 paste ur full rule34 API key (e.g. &api_key=xxx&user_id=777): 
 ```
-ur DONE! u can access r34 api
+ur DONE! u can access r34-dl (rule34 option)
 
 ### Showcase
 <img src="https://github.com/cfels/r34-dl/blob/dev/assets/showcase/showcase.gif?raw=true" width="600">
