@@ -11,8 +11,8 @@ jobs:
   add-header:
     runs-on: ubuntu-latest
     steps:
-      - name: Update Release Body
-        uses: actions/github-script@v6
+      - name: Update Release (with header)
+        uses: actions/github-script@v9
         with:
           script: |
             const { owner, repo } = context.repo;
