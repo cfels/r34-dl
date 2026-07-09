@@ -7,10 +7,11 @@ import (
 )
 
 type Config struct {
-	APIKey      string `json:"api_key"`
-	UserID      string `json:"user_id"`
-	AgeVerified bool   `json:"age_verified"`
-	ActiveAPI   string `json:"active_api"`
+	APIKey        string   `json:"api_key"`
+	UserID        string   `json:"user_id"`
+	AgeVerified   bool     `json:"age_verified"`
+	ActiveAPI     string   `json:"active_api"`
+	SearchHistory []string `json:"search_history,omitempty"`
 }
 
 func path() (string, error) {
