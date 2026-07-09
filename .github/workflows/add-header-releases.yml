@@ -1,4 +1,4 @@
-name: Auto add-header to releases
+name: Auto add header to release's
 
 on:
   release:
@@ -11,7 +11,7 @@ jobs:
   add-header:
     runs-on: ubuntu-latest
     steps:
-      - name: Update Release (with header)
+      - name: Update Release Note (put header at top of release note's)
         uses: actions/github-script@v9
         with:
           script: |
