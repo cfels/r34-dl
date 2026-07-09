@@ -10,6 +10,7 @@ import (
 	_ "image/png"
 	"io"
 	"net/http"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -100,7 +101,15 @@ func NewModel(sbClient, r34Client api.Client, cfg conf.Config, initialTags strin
 		r34Client:  r34Client,
 		limit:      limit,
 		query:      initialTags,
-		downloader: dl.New("downloads", 4),
+		downloader: func() *dl.Downloader {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				home = "."
+			}
+			dlPath := filepath.Join(home, "r34-dl-downloads")
+			_ = os.MkdirAll(dlPath, 0o755)
+			return dl.New(dlPath, 4)
+		}(),
 		width:      100,
 		height:     30,
 		history:    cfg.SearchHistory,
