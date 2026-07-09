@@ -82,11 +82,12 @@ type Model struct {
 	video         *videoPlayer
 	ageGateCursor int
 
-	history    []string
-	historyIdx int
+	history       []string
+	historyIdx    int
+	inputCursor   int
+	cursorVisible bool
 }
 
-// Cfg returns the current config. Used by tests to inspect state changes.
 func (m Model) Cfg() conf.Config { return m.cfg }
 
 func NewModel(sbClient, r34Client api.Client, cfg conf.Config, initialTags string, limit int) Model {
@@ -114,6 +115,7 @@ func NewModel(sbClient, r34Client api.Client, cfg conf.Config, initialTags strin
 		height:     30,
 		history:    cfg.SearchHistory,
 		historyIdx: len(cfg.SearchHistory),
+		cursorVisible: true,
 	}
 	if !cfg.AgeVerified {
 		m.state = stateAgeGate
@@ -133,6 +135,9 @@ func (m Model) Init() tea.Cmd {
 			doCountTotal(m.client, m.query, gen),
 			startCountTicker(gen),
 		)
+	}
+	if m.state == stateSearch {
+		return startBlink()
 	}
 	return nil
 }
@@ -394,6 +399,13 @@ func downloadOne(d *dl.Downloader, post api.Post) tea.Cmd {
 
 type resultMsg dl.Result
 type doneMsg struct{}
+type blinkMsg struct{}
+
+func startBlink() tea.Cmd {
+	return tea.Tick(500*time.Millisecond, func(time.Time) tea.Msg {
+		return blinkMsg{}
+	})
+}
 
 func waitForResult(ch <-chan dl.Result) tea.Cmd {
 	return func() tea.Msg {
@@ -510,12 +522,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				_ = conf.Save(m.cfg)
 				m.state = stateSearch
+				m.cursorVisible = true
+				return m, startBlink()
 			case "ctrl+c", "q":
 				return m, tea.Quit
 			}
 			return m, nil
 
 		case stateSearch:
+			m.cursorVisible = true
 			switch msg.Type {
 			case tea.KeyCtrlC, tea.KeyEsc:
 				return m, tea.Quit
@@ -533,21 +548,38 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if len(m.history) > 0 && m.historyIdx > 0 {
 					m.historyIdx--
 					m.query = m.history[m.historyIdx]
+					m.inputCursor = len([]rune(m.query))
 				}
 			case tea.KeyDown:
 				if m.historyIdx < len(m.history)-1 {
 					m.historyIdx++
 					m.query = m.history[m.historyIdx]
+					m.inputCursor = len([]rune(m.query))
 				} else if m.historyIdx == len(m.history)-1 {
 					m.historyIdx = len(m.history)
 					m.query = ""
+					m.inputCursor = 0
+				}
+			case tea.KeyLeft:
+				if m.inputCursor > 0 {
+					m.inputCursor--
+				}
+			case tea.KeyRight:
+				if m.inputCursor < len([]rune(m.query)) {
+					m.inputCursor++
 				}
 			case tea.KeyBackspace:
-				if len(m.query) > 0 {
-					m.query = m.query[:len(m.query)-1]
+				runes := []rune(m.query)
+				if m.inputCursor > 0 {
+					runes = append(runes[:m.inputCursor-1], runes[m.inputCursor:]...)
+					m.query = string(runes)
+					m.inputCursor--
 				}
 			case tea.KeySpace:
-				m.query += " "
+				runes := []rune(m.query)
+				runes = append(runes[:m.inputCursor], append([]rune{' '}, runes[m.inputCursor:]...)...)
+				m.query = string(runes)
+				m.inputCursor++
 			case tea.KeyTab:
 				if m.cfg.ActiveAPI == "rule34" {
 					m.switchAPI("safebooru")
@@ -557,7 +589,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 			case tea.KeyRunes:
-				m.query += string(msg.Runes)
+				runes := []rune(m.query)
+				runes = append(runes[:m.inputCursor], append(msg.Runes, runes[m.inputCursor:]...)...)
+				m.query = string(runes)
+				m.inputCursor += len(msg.Runes)
 			}
 			return m, nil
 
@@ -614,12 +649,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "/":
 				m.state = stateSearch
 				m.query = ""
+				m.inputCursor = 0
+				m.cursorVisible = true
 				m.posts = nil
 				m.cursor, m.offset, m.page = 0, 0, 0
 				m.noMore = false
 				m.totalKnown = false
 				m.totalCount = 0
 				m.historyIdx = len(m.history)
+				return m, startBlink()
 			}
 			return m, nil
 
@@ -764,6 +802,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case doneMsg:
 		m.state = stateDone
+
+	case blinkMsg:
+		if m.state == stateSearch {
+			m.cursorVisible = !m.cursorVisible
+			return m, startBlink()
+		}
 	}
 	return m, nil
 }
@@ -904,7 +948,25 @@ func (m Model) View() string {
  ░▒▓█▓▒░░▒▓█▓▒░      ░▒▓█▓▒░      ░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░        
  ░▒▓█▓▒░░▒▓█▓▒░▒▓███████▓▒░       ░▒▓█▓▒░▒▓███████▓▒░░▒▓████████▓▒░ v1.1 `
 		s := titleStyle.Render(ascii) + "\n\n"
-		s += m.apiLabel() + " " + titleStyle.Render("tags: ") + inputStyle.Render(m.query) + cursorStyle.Render("█") + "\n\n"
+		runes := []rune(m.query)
+		before := inputStyle.Render(string(runes[:m.inputCursor]))
+		var cursorChar string
+		if m.inputCursor < len(runes) {
+			cursorChar = string(runes[m.inputCursor])
+		} else {
+			cursorChar = " "
+		}
+		var cursorRendered string
+		if m.cursorVisible {
+			cursorRendered = cursorStyle.Reverse(true).Render(cursorChar)
+		} else {
+			cursorRendered = inputStyle.Render(cursorChar)
+		}
+		var after string
+		if m.inputCursor+1 < len(runes) {
+			after = inputStyle.Render(string(runes[m.inputCursor+1:]))
+		}
+		s += m.apiLabel() + " " + titleStyle.Render("tags: ") + before + cursorRendered + after + "\n\n"
 		if m.cfg.ActiveAPI == "rule34" && m.cfg.APIKey == "" {
 			s += errorStyle.Render("   rule34 now requires an API key") + "\n"
 			s += dimStyle.Render(" make sure to get one from thier website, then use: ./rule34 -apik") + "\n\n"
