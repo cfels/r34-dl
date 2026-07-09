@@ -58,7 +58,7 @@ ur DONE! u can access r34 api
 </table>
 
 ### Constributing
-Feel free to constribue, i'll should accept most patches.
+Feel free to constribue, i'll should accept most of the patches.
 
 ### License
 This Project use's [MIT License](https://github.com/cfels/r34-dl/blob/dev/LICENSE) so make sure to follow it!
