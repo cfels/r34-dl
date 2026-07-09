@@ -10,7 +10,6 @@ import (
 	_ "image/png"
 	"io"
 	"net/http"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -77,6 +76,8 @@ type Model struct {
 
 	viewerPost    api.Post
 	viewerErr     string
+	viewerImage   string
+	videoFrame    string
 	video         *videoPlayer
 	ageGateCursor int
 }
@@ -149,7 +150,7 @@ type imageFetchedMsg struct {
 	err  error
 }
 
-type imageRenderedMsg struct{}
+type imageRenderedMsg struct{ s string }
 
 type singleDownloadMsg struct {
 	path string
@@ -302,6 +303,36 @@ func scaleToFit(img image.Image, termCols, termRows int) image.Image {
 	return dst
 }
 
+func encodeImage(img image.Image) (string, error) {
+	var buf strings.Builder
+	err := rasterm.Encode(&buf, img)
+	if err == nil {
+		return buf.String(), nil
+	}
+	return halfBlockEncode(img)
+}
+
+func halfBlockEncode(img image.Image) (string, error) {
+	b := img.Bounds()
+	width, height := b.Dx(), b.Dy()
+	var buf strings.Builder
+	for y := b.Min.Y; y < b.Min.Y+height; y += 2 {
+		for x := b.Min.X; x < b.Min.X+width; x++ {
+			tr, tg, tb, _ := img.At(x, y).RGBA()
+			var br, bg, bb uint32
+			if y+1 < b.Min.Y+height {
+				br, bg, bb, _ = img.At(x, y+1).RGBA()
+			}
+			fmt.Fprintf(&buf, "\033[38;2;%d;%d;%dm\033[48;2;%d;%d;%dm▄",
+				br>>8, bg>>8, bb>>8,
+				tr>>8, tg>>8, tb>>8,
+			)
+		}
+		buf.WriteString("\033[0m\n")
+	}
+	return buf.String(), nil
+}
+
 func renderImage(data []byte, termCols, termRows int) tea.Cmd {
 	return func() tea.Msg {
 		img, _, err := image.Decode(bytes.NewReader(data))
@@ -313,11 +344,11 @@ func renderImage(data []byte, termCols, termRows int) tea.Cmd {
 			previewRows = 4
 		}
 		scaled := scaleToFit(img, termCols, previewRows)
-		fmt.Fprint(os.Stdout, "\033[2J\033[H")
-		if err := rasterm.Encode(os.Stdout, scaled); err != nil {
+		s, err := encodeImage(scaled)
+		if err != nil {
 			return imageFetchedMsg{err: fmt.Errorf("render: %w", err)}
 		}
-		return imageRenderedMsg{}
+		return imageRenderedMsg{s: s}
 	}
 }
 
@@ -328,11 +359,11 @@ func renderVideoFrame(img image.Image, termCols, termRows int) tea.Cmd {
 			previewRows = 4
 		}
 		scaled := scaleToFit(img, termCols, previewRows)
-		fmt.Fprint(os.Stdout, "\033[H")
-		if err := rasterm.Encode(os.Stdout, scaled); err != nil {
+		s, err := encodeImage(scaled)
+		if err != nil {
 			return videoDoneMsg{err: fmt.Errorf("render frame: %w", err)}
 		}
-		return imageRenderedMsg{}
+		return imageRenderedMsg{s: s}
 	}
 }
 
@@ -524,6 +555,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if len(m.posts) > 0 {
 					m.viewerPost = m.posts[m.cursor]
 					m.viewerErr = ""
+					m.viewerImage = ""
+					m.videoFrame = ""
 					if isVideo(m.viewerPost) {
 						m.state = stateViewerLoading
 						fileURL := m.viewerPost.FileURL()
@@ -557,6 +590,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case stateViewer:
+			m.viewerImage = ""
 			m.state = stateList
 			return m, tea.ClearScreen
 		
@@ -565,6 +599,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				_ = m.video.cmd.Process.Kill()
 				m.video = nil
 			}
+			m.videoFrame = ""
 			m.state = stateList
 			return m, tea.ClearScreen
 		}
@@ -586,7 +621,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, renderImage(msg.data, m.width, m.height)
 
 	case imageRenderedMsg:
-		m.state = stateViewer
+		if m.state == stateVideoPlaying {
+			m.videoFrame = msg.s
+		} else {
+			m.viewerImage = msg.s
+			m.state = stateViewer
+		}
 		return m, nil
 
 	case struct{ vp *videoPlayer }:
@@ -597,7 +637,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.video = msg.vp
 		m.state = stateVideoPlaying
-		fmt.Fprint(os.Stdout, "\033[2J\033[H")
 		return m, nextFrame(m.video)
 
 	case videoFrameMsg:
@@ -878,19 +917,27 @@ func (m Model) View() string {
 		return dimStyle.Render(fmt.Sprintf("fetching #%d ...", m.viewerPost.ID))
 
 	case stateVideoPlaying:
-		return "\n" + dimStyle.Render(fmt.Sprintf(
+		status := "\n" + dimStyle.Render(fmt.Sprintf(
 			"▶ #%d  %dx%d  any key: stop",
 			m.viewerPost.ID, m.viewerPost.Width, m.viewerPost.Height,
 		))
+		if m.videoFrame != "" {
+			return m.videoFrame + status
+		}
+		return status
 
 	case stateViewer:
 		if m.viewerErr != "" {
 			return errorStyle.Render(m.viewerErr) + "\n\n" + dimStyle.Render("any key: back")
 		}
-		return "\n" + dimStyle.Render(fmt.Sprintf(
+		status := "\n" + dimStyle.Render(fmt.Sprintf(
 			"#%d  %dx%d  any key / space: back",
 			m.viewerPost.ID, m.viewerPost.Width, m.viewerPost.Height,
 		))
+		if m.viewerImage != "" {
+			return m.viewerImage + status
+		}
+		return status
 
 	case stateDownloading:
 		return fmt.Sprintf("downloading...\n\n%d/%d done, %d failed\n\n%s",
