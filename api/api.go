@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -123,7 +124,7 @@ func (c *SafebooruClient) CountPosts(tags string) (int, error) {
 	}
 	req, err := http.NewRequest(http.MethodGet, base+"?"+q.Encode(), nil)
 	if err != nil {
-		return 0, fmt.Errorf("building request: %w", err)
+		return 0, fmt.Errorf("couldn't build request: %w", err)
 	}
 	req.Header.Set("User-Agent", "r34-dl/safebooru-client")
 	resp, err := c.http.Do(req)
@@ -132,15 +133,15 @@ func (c *SafebooruClient) CountPosts(tags string) (int, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("unexpected status: %d", resp.StatusCode)
+		return 0, fmt.Errorf("bad status %d", resp.StatusCode)
 	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return 0, fmt.Errorf("reading body: %w", err)
+		return 0, fmt.Errorf("couldn't read response: %w", err)
 	}
 	var pc postCountXML
 	if err := xml.Unmarshal(body, &pc); err != nil {
-		return 0, fmt.Errorf("parsing XML: %w", err)
+		return 0, fmt.Errorf("couldn't parse response: %w", err)
 	}
 	return pc.Count, nil
 }
@@ -162,7 +163,7 @@ func (c *SafebooruClient) SearchPosts(tags string, limit, page int) ([]Post, err
 	}
 	req, err := http.NewRequest(http.MethodGet, base+"?"+q.Encode(), nil)
 	if err != nil {
-		return nil, fmt.Errorf("building request: %w", err)
+		return nil, fmt.Errorf("couldn't build request: %w", err)
 	}
 	req.Header.Set("User-Agent", "r34-dl/safebooru-client")
 	resp, err := c.http.Do(req)
@@ -171,18 +172,18 @@ func (c *SafebooruClient) SearchPosts(tags string, limit, page int) ([]Post, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status: %d", resp.StatusCode)
+		return nil, fmt.Errorf("bad status %d", resp.StatusCode)
 	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("reading body: %w", err)
+		return nil, fmt.Errorf("couldn't read response: %w", err)
 	}
 	if len(body) == 0 || string(body) == "null" {
 		return []Post{}, nil
 	}
 	var posts []Post
 	if err := json.Unmarshal(body, &posts); err != nil {
-		return nil, fmt.Errorf("parsing JSON: %w", err)
+		return nil, fmt.Errorf("couldn't parse response: %w", err)
 	}
 	return posts, nil
 }
@@ -227,7 +228,7 @@ func (c *Rule34Client) Ping() error {
 	q.Set("api_key", c.apiKey)
 	req, err := http.NewRequest(http.MethodGet, base+"?"+q.Encode(), nil)
 	if err != nil {
-		return fmt.Errorf("building request: %w", err)
+		return fmt.Errorf("couldn't build request: %w", err)
 	}
 	req.Header.Set("User-Agent", "r34-dl/rule34-client")
 	resp, err := c.http.Do(req)
@@ -236,16 +237,19 @@ func (c *Rule34Client) Ping() error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("unexpected status: %d", resp.StatusCode)
+		return fmt.Errorf("bad status %d", resp.StatusCode)
 	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("reading body: %w", err)
+		return fmt.Errorf("couldn't read response: %w", err)
 	}
 	if len(body) > 0 && body[0] == '"' {
 		var msg string
 		_ = json.Unmarshal(body, &msg)
-		return fmt.Errorf("API error: %s", msg)
+		if strings.Contains(msg, "Missing authentication") || strings.Contains(msg, "authentication") {
+			return fmt.Errorf("r34 auth err: missing api key! | run: r34-dl --add-api-key")
+		}
+		return fmt.Errorf("r34 err: %s", msg)
 	}
 	return nil
 }
@@ -266,7 +270,7 @@ func (c *Rule34Client) CountPosts(tags string) (int, error) {
 	}
 	req, err := http.NewRequest(http.MethodGet, base+"?"+q.Encode(), nil)
 	if err != nil {
-		return 0, fmt.Errorf("building request: %w", err)
+		return 0, fmt.Errorf("couldn't build request: %w", err)
 	}
 	req.Header.Set("User-Agent", "r34-dl/rule34-client")
 	resp, err := c.http.Do(req)
@@ -275,20 +279,23 @@ func (c *Rule34Client) CountPosts(tags string) (int, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("unexpected status: %d", resp.StatusCode)
+		return 0, fmt.Errorf("bad status %d", resp.StatusCode)
 	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return 0, fmt.Errorf("reading body: %w", err)
+		return 0, fmt.Errorf("couldn't read response: %w", err)
 	}
 	if len(body) > 0 && body[0] == '"' {
 		var msg string
 		_ = json.Unmarshal(body, &msg)
-		return 0, fmt.Errorf("rule34 API error: %s", msg)
+		if strings.Contains(msg, "Missing authentication") || strings.Contains(msg, "authentication") {
+			return 0, fmt.Errorf("r34 auth err: missing api key! | run: r34-dl --add-api-key")
+		}
+		return 0, fmt.Errorf("r34 err: %s", msg)
 	}
 	var pc postCountXML
 	if err := xml.Unmarshal(body, &pc); err != nil {
-		return 0, fmt.Errorf("parsing XML: %w", err)
+		return 0, fmt.Errorf("couldn't parse response: %w", err)
 	}
 	return pc.Count, nil
 }
@@ -314,7 +321,7 @@ func (c *Rule34Client) SearchPosts(tags string, limit, page int) ([]Post, error)
 	}
 	req, err := http.NewRequest(http.MethodGet, base+"?"+q.Encode(), nil)
 	if err != nil {
-		return nil, fmt.Errorf("building request: %w", err)
+		return nil, fmt.Errorf("couldn't build request: %w", err)
 	}
 	req.Header.Set("User-Agent", "r34-dl/rule34-client")
 	resp, err := c.http.Do(req)
@@ -323,11 +330,11 @@ func (c *Rule34Client) SearchPosts(tags string, limit, page int) ([]Post, error)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status: %d", resp.StatusCode)
+		return nil, fmt.Errorf("bad status %d", resp.StatusCode)
 	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("reading body: %w", err)
+		return nil, fmt.Errorf("couldn't read response: %w", err)
 	}
 	if len(body) == 0 || string(body) == "null" || string(body) == "[]" {
 		return []Post{}, nil
@@ -335,11 +342,14 @@ func (c *Rule34Client) SearchPosts(tags string, limit, page int) ([]Post, error)
 	if len(body) > 0 && body[0] == '"' {
 		var msg string
 		_ = json.Unmarshal(body, &msg)
-		return nil, fmt.Errorf("rule34 API error: %s", msg)
+		if strings.Contains(msg, "Missing authentication") || strings.Contains(msg, "authentication") {
+			return nil, fmt.Errorf("r34 auth err: missing api key! | run: r34-dl -apik")
+		}
+		return nil, fmt.Errorf("r34 err: %s", msg)
 	}
 	var raw []r34Post
 	if err := json.Unmarshal(body, &raw); err != nil {
-		return nil, fmt.Errorf("parsing JSON: %w", err)
+		return nil, fmt.Errorf("couldn't parse response: %w", err)
 	}
 	posts := make([]Post, 0, len(raw))
 	for _, r := range raw {

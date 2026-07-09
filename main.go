@@ -55,6 +55,8 @@ func main() {
 	limit := flag.Int("limit", 30, "max results to fetch")
 	flag.IntVar(limit, "l", 30, "max results to fetch (short)")
 
+	runTests := flag.Bool("run-tests", false, "run tests")
+
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: r34-dl [options]\n\nOptions:\n")
 		fmt.Fprintf(os.Stderr, "  -h, --help                       show this help message\n")
@@ -62,9 +64,22 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  -b, --bulk                       download in bulk\n")
 		fmt.Fprintf(os.Stderr, "  -l, --limit <N>                  max results to fetch (default 30)\n")
 		fmt.Fprintf(os.Stderr, "  -t, --tags <tags>                search tags (comma-separated)\n")
+		fmt.Fprintf(os.Stderr, "  --run-tests                      run tests\n")
 	}
 
 	flag.Parse()
+
+	if *runTests {
+		sb := api.NewSafebooruClient()
+		r34 := api.NewRule34Client("", "")
+		cfg := conf.Config{AgeVerified: false, ActiveAPI: "safebooru"}
+		p := tea.NewProgram(ui.NewModel(sb, r34, cfg, "", 30))
+		if _, err := p.Run(); err != nil {
+			fmt.Println("err!", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	if *addKey {
 		reader := bufio.NewReader(os.Stdin)
@@ -73,7 +88,7 @@ func main() {
 		line, _ := reader.ReadString('\n')
 		raw := strings.TrimSpace(line)
 		if raw == "" {
-			log.Fatal("no credentials provided")
+			log.Fatal("no creds provided")
 		}
 
 		raw = strings.TrimLeft(raw, "&?")

@@ -75,10 +75,14 @@ type Model struct {
 	failed     int
 	total      int
 
-	viewerPost api.Post
-	viewerErr  string
-	video      *videoPlayer
+	viewerPost    api.Post
+	viewerErr     string
+	video         *videoPlayer
+	ageGateCursor int
 }
+
+// Cfg returns the current config. Used by tests to inspect state changes.
+func (m Model) Cfg() conf.Config { return m.cfg }
 
 func NewModel(sbClient, r34Client api.Client, cfg conf.Config, initialTags string, limit int) Model {
 	active := sbClient
@@ -446,16 +450,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case stateAgeGate:
 			switch msg.String() {
-			case "y", "Y":
+			case "left", "h":
+				m.ageGateCursor = 0
+			case "right", "l":
+				m.ageGateCursor = 1
+			case "enter", " ":
 				m.cfg.AgeVerified = true
-				m.cfg.ActiveAPI = "rule34"
-				m.client = m.r34Client
-				_ = conf.Save(m.cfg)
-				m.state = stateSearch
-			case "n", "N":
-				m.cfg.AgeVerified = true
-				m.cfg.ActiveAPI = "safebooru"
-				m.client = m.sbClient
+				if m.ageGateCursor == 0 {
+					m.cfg.ActiveAPI = "rule34"
+					m.client = m.r34Client
+				} else {
+					m.cfg.ActiveAPI = "safebooru"
+					m.client = m.sbClient
+				}
 				_ = conf.Save(m.cfg)
 				m.state = stateSearch
 			case "ctrl+c", "q":
@@ -779,11 +786,39 @@ func (m Model) apiLabel() string {
 func (m Model) View() string {
 	switch m.state {
 	case stateAgeGate:
+		activeYesBox := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(mochaGreen).
+			Foreground(mochaGreen).
+			Bold(true).
+			Padding(0, 2)
+
+		activeNoBox := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(mochaRed).
+			Foreground(mochaRed).
+			Bold(true).
+			Padding(0, 2)
+
+		inactiveBox := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(mochaOverlay0).
+			Foreground(mochaOverlay0).
+			Padding(0, 2)
+
+		var yesBox, noBox string
+		if m.ageGateCursor == 0 {
+			yesBox = activeYesBox.Render("yes  (rule34)")
+			noBox = inactiveBox.Render("no  (safebooru)")
+		} else {
+			yesBox = inactiveBox.Render("yes  (rule34)")
+			noBox = activeNoBox.Render("no  (safebooru)")
+		}
+
 		s := titleStyle.Render("r34-dl") + "\n\n"
 		s += inputStyle.Render("are you 18 or older?") + "\n\n"
-		s += selectedStyle.Render("  [Y]") + "  " + dimStyle.Render("yes → rule34.xxx") + "\n"
-		s += dimStyle.Render("  [N]") + "  " + dimStyle.Render("no  → safebooru") + "\n\n"
-		s += dimStyle.Render("q / ctrl+c: quit")
+		s += lipgloss.JoinHorizontal(lipgloss.Center, yesBox, "   ", noBox) + "\n\n"
+		s += dimStyle.Render("←/→: select · enter: confirm · q: quit")
 		return s
 
 	case stateSearch:
@@ -794,12 +829,12 @@ func (m Model) View() string {
  ░▒▓███████▓▒░░▒▓███████▓▒░░▒▓████████▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░        
  ░▒▓█▓▒░░▒▓█▓▒░      ░▒▓█▓▒░      ░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░        
  ░▒▓█▓▒░░▒▓█▓▒░      ░▒▓█▓▒░      ░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░        
- ░▒▓█▓▒░░▒▓█▓▒░▒▓███████▓▒░       ░▒▓█▓▒░▒▓███████▓▒░░▒▓████████▓▒░ `
+ ░▒▓█▓▒░░▒▓█▓▒░▒▓███████▓▒░       ░▒▓█▓▒░▒▓███████▓▒░░▒▓████████▓▒░ v1.1 `
 		s := titleStyle.Render(ascii) + "\n\n"
 		s += m.apiLabel() + " " + titleStyle.Render("tags: ") + inputStyle.Render(m.query) + cursorStyle.Render("█") + "\n\n"
 		if m.cfg.ActiveAPI == "rule34" && m.cfg.APIKey == "" {
-			s += errorStyle.Render("⚠ rule34 now requires an API key — searches will fail without one") + "\n"
-			s += dimStyle.Render("  get one at api.rule34.xxx, then run: r34-dl --add-api-key <key>") + "\n\n"
+			s += errorStyle.Render("   rule34 now requires an API key") + "\n"
+			s += dimStyle.Render(" make sure to get one from thier website, then use: ./rule34 -apik") + "\n\n"
 		}
 		if m.err != "" {
 			s += errorStyle.Render(m.err) + "\n\n"
