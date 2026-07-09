@@ -80,6 +80,9 @@ type Model struct {
 	videoFrame    string
 	video         *videoPlayer
 	ageGateCursor int
+
+	history    []string
+	historyIdx int
 }
 
 // Cfg returns the current config. Used by tests to inspect state changes.
@@ -100,6 +103,8 @@ func NewModel(sbClient, r34Client api.Client, cfg conf.Config, initialTags strin
 		downloader: dl.New("downloads", 4),
 		width:      100,
 		height:     30,
+		history:    cfg.SearchHistory,
+		historyIdx: len(cfg.SearchHistory),
 	}
 	if !cfg.AgeVerified {
 		m.state = stateAgeGate
@@ -507,7 +512,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			case tea.KeyEnter:
 				if m.query != "" {
+					if len(m.history) == 0 || m.history[len(m.history)-1] != m.query {
+						m.history = append(m.history, m.query)
+						m.cfg.SearchHistory = m.history
+						_ = conf.Save(m.cfg)
+					}
+					m.historyIdx = len(m.history)
 					return m, m.startSearch()
+				}
+			case tea.KeyUp:
+				if len(m.history) > 0 && m.historyIdx > 0 {
+					m.historyIdx--
+					m.query = m.history[m.historyIdx]
+				}
+			case tea.KeyDown:
+				if m.historyIdx < len(m.history)-1 {
+					m.historyIdx++
+					m.query = m.history[m.historyIdx]
+				} else if m.historyIdx == len(m.history)-1 {
+					m.historyIdx = len(m.history)
+					m.query = ""
 				}
 			case tea.KeyBackspace:
 				if len(m.query) > 0 {
@@ -586,6 +610,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.noMore = false
 				m.totalKnown = false
 				m.totalCount = 0
+				m.historyIdx = len(m.history)
 			}
 			return m, nil
 

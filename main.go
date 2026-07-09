@@ -55,6 +55,9 @@ func main() {
 	limit := flag.Int("limit", 30, "max results to fetch")
 	flag.IntVar(limit, "l", 30, "max results to fetch (short)")
 
+	clearHistory := flag.Bool("clear-history", false, "clear search history")
+	flag.BoolVar(clearHistory, "cls", false, "clear search history (short)")
+
 	runTests := flag.Bool("run-tests", false, "run tests")
 
 	flag.Usage = func() {
@@ -64,10 +67,24 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  -b, --bulk                       download in bulk\n")
 		fmt.Fprintf(os.Stderr, "  -l, --limit <N>                  max results to fetch (default 30)\n")
 		fmt.Fprintf(os.Stderr, "  -t, --tags <tags>                search tags (comma-separated)\n")
+		fmt.Fprintf(os.Stderr, "  -cls, --clear-history            clear search history\n")
 		fmt.Fprintf(os.Stderr, "  --run-tests                      run tests\n")
 	}
 
 	flag.Parse()
+
+	if *clearHistory {
+		cfg, err := conf.Load()
+		if err != nil {
+			log.Fatalf("failed to load config: %v", err)
+		}
+		cfg.SearchHistory = nil
+		if err := conf.Save(cfg); err != nil {
+			log.Fatalf("failed to save config: %v", err)
+		}
+		fmt.Println("search history cleared")
+		return
+	}
 
 	if *runTests {
 		sb := api.NewSafebooruClient()
