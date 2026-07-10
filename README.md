@@ -9,6 +9,9 @@ a rule34/safebooru downloader with alot of feature's, Why? cuz i didn't saw any 
 > [!NOTE]  
 > R34 updated thier API and now u need API key, read [Obtaining API key](#obatining-api-key), what about Safebooru? well Safebooru doesn't need one so u can just jump in and use the tool (unless u want rule34 access then you'll need API key)
 
+### Donwloading
+you can download pre-built binary from [Release's](https://github.com/cfels/r34-dl/releases)
+
 ### Building
 ```
 go build .
