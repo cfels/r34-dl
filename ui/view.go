@@ -164,7 +164,7 @@ func (m Model) View() string {
 		s += m.apiLabel() + " " + titleStyle.Render("tags: ") + before + cursorRendered + after + "\n\n"
 		if m.cfg.ActiveAPI == "rule34" && m.cfg.APIKey == "" {
 			s += errorStyle.Render("   rule34 now requires an API key") + "\n"
-			s += dimStyle.Render(" make sure to get one from thier website, then use: ./rule34 -apik") + "\n\n"
+			s += dimStyle.Render(" make sure to get one from thier website, then use: ./r34-dl -apik") + "\n\n"
 		}
 		if m.err != "" {
 			s += errorStyle.Render(m.err) + "\n\n"
