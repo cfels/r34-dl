@@ -14,6 +14,7 @@ you can download pre-built binary from [Release's](https://github.com/cfels/r34-
 
 ### Building
 ```
+go get
 CGO_ENABLED=0 go build -o r34-dl .
 ./r34-dl
 ```
