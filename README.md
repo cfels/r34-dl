@@ -37,11 +37,10 @@ Options:
   --no-audio                       mute video audio
   --filter-ai                      hide AI generated posts
   --no-filter-ai                   show AI generated posts
+  --interpolate                    smooth videos below 60fps (default: on for small previews)
+  --no-interpolate                 play videos at their own frame rate
   --run-tests                      run tests
 ```
-
-video previews are muted by default, turn audio on with `r34-dl -a` (or disable it again with `--no-audio`),
-while a video plays `m` toggles audio and the choice is remembered for the next video.
 
 ### Obatining API key
 Here's how to get one

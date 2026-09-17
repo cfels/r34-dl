@@ -64,7 +64,7 @@ func videoPost(path string) api.Post {
 
 func playClip(t *testing.T, path string) (int, time.Duration) {
 	t.Helper()
-	vp, err := startVideoPlayer(videoPost(path), 80, 24, false)
+	vp, err := startVideoPlayer(videoPost(path), 80, 24, videoOptions{})
 	if err != nil {
 		t.Fatalf("startVideoPlayer: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestVideoPlayerCapsFramerateAt60(t *testing.T) {
 }
 
 func TestVideoPlayerKeepsLatestFrame(t *testing.T) {
-	vp, err := startVideoPlayer(videoPost(makeTestVideo(t, 30, 3)), 80, 24, false)
+	vp, err := startVideoPlayer(videoPost(makeTestVideo(t, 30, 3)), 80, 24, videoOptions{})
 	if err != nil {
 		t.Fatalf("startVideoPlayer: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestVideoPlayerKeepsLatestFrame(t *testing.T) {
 }
 
 func TestVideoAudioIsOffByDefault(t *testing.T) {
-	vp, err := startVideoPlayer(videoPost(makeTestVideo(t, 30, 2)), 80, 24, false)
+	vp, err := startVideoPlayer(videoPost(makeTestVideo(t, 30, 2)), 80, 24, videoOptions{})
 	if err != nil {
 		t.Fatalf("startVideoPlayer: %v", err)
 	}
@@ -158,7 +158,7 @@ func TestVideoAudioToggle(t *testing.T) {
 	if _, err := exec.LookPath("ffplay"); err != nil {
 		t.Skip("ffplay not installed")
 	}
-	vp, err := startVideoPlayer(videoPost(makeTestVideo(t, 30, 2)), 80, 24, true)
+	vp, err := startVideoPlayer(videoPost(makeTestVideo(t, 30, 2)), 80, 24, videoOptions{audio: true})
 	if err != nil {
 		t.Fatalf("startVideoPlayer: %v", err)
 	}
@@ -233,6 +233,72 @@ func TestVideoFitHasNoLetterbox(t *testing.T) {
 	}
 }
 
+func TestVideoRateFilter(t *testing.T) {
+	on, off := true, false
+	cases := []struct {
+		rate   float64
+		pixels int
+		smooth *bool
+		want   string
+	}{
+		{rate: 120, pixels: 100000, want: "fps=60"},
+		{rate: 60, pixels: 100000, want: ""},
+		{rate: 59.94, pixels: 100000, want: ""},
+		{rate: 30, pixels: 100000, want: "minterpolate="},
+		{rate: 30, pixels: 500000, want: ""},
+		{rate: 30, pixels: 500000, smooth: &on, want: "minterpolate="},
+		{rate: 30, pixels: 100000, smooth: &off, want: ""},
+		{rate: 0, pixels: 100000, want: "fps=60"},
+	}
+	for _, c := range cases {
+		got := videoRateFilter(c.rate, c.pixels, c.smooth)
+		if c.want == "" && got != "" {
+			t.Errorf("rate %v pixels %d -> %q, want none", c.rate, c.pixels, got)
+			continue
+		}
+		if c.want != "" && !strings.HasPrefix(got, c.want) {
+			t.Errorf("rate %v pixels %d -> %q, want prefix %q", c.rate, c.pixels, got, c.want)
+		}
+	}
+}
+
+func TestVideoInterpolationRaisesFramerate(t *testing.T) {
+	on := true
+	clip := makeTestVideo(t, 30, 1)
+	vp, err := startVideoPlayer(videoPost(clip), 80, 24, videoOptions{smooth: &on})
+	if err != nil {
+		t.Fatalf("startVideoPlayer: %v", err)
+	}
+	defer vp.stop()
+
+	frames := 0
+	deadline := time.After(15 * time.Second)
+	for {
+		select {
+		case _, ok := <-vp.frames:
+			if !ok {
+				if frames <= 45 {
+					t.Fatalf("interpolated 30fps clip produced %d frames, want about 60", frames)
+				}
+				return
+			}
+			frames++
+		case <-deadline:
+			t.Fatalf("timed out after %d frames", frames)
+		}
+	}
+}
+
+func TestAudioFilterArgs(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg not installed")
+	}
+	args := audioFilterArgs()
+	if len(args) != 2 || args[0] != "-af" || args[1] == "" {
+		t.Fatalf("audio filter args = %v", args)
+	}
+}
+
 func TestMuteKeyTogglesAudioPreference(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	m := newListModel()
@@ -260,7 +326,7 @@ func TestGIFKeepsLooping(t *testing.T) {
 		t.Fatal("gif url with query string should be detected")
 	}
 	post := api.Post{Image: "loop.gif", FileURL_: makeTestGIF(t, 1)}
-	vp, err := startVideoPlayer(post, 80, 24, false)
+	vp, err := startVideoPlayer(post, 80, 24, videoOptions{})
 	if err != nil {
 		t.Fatalf("startVideoPlayer: %v", err)
 	}
@@ -286,7 +352,7 @@ func TestGIFKeepsLooping(t *testing.T) {
 }
 
 func TestVideoViewerRendersEveryFrame(t *testing.T) {
-	vp, err := startVideoPlayer(videoPost(makeTestVideo(t, 30, 3)), 80, 24, false)
+	vp, err := startVideoPlayer(videoPost(makeTestVideo(t, 30, 3)), 80, 24, videoOptions{})
 	if err != nil {
 		t.Fatalf("startVideoPlayer: %v", err)
 	}

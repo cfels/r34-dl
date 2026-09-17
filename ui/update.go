@@ -223,7 +223,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						post := m.viewerPost
 						w, h := m.width, m.height
 						return m, func() tea.Msg {
-							vp, err := startVideoPlayer(post, w, h, m.cfg.AudioEnabled)
+							vp, err := startVideoPlayer(post, w, h, videoOptions{
+								audio:  m.cfg.AudioEnabled,
+								smooth: m.smoothVideos(),
+							})
 							if err != nil {
 								return videoDoneMsg{err: err}
 							}

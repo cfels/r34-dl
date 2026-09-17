@@ -21,8 +21,9 @@ import (
 )
 
 const (
-	videoMaxFPS    = 60
-	videoUserAgent = "r34-dl/viewer"
+	videoMaxFPS          = 60
+	interpolateMaxPixels = 130000
+	videoUserAgent       = "r34-dl/viewer"
 )
 
 const (
@@ -71,6 +72,11 @@ type videoPlayer struct {
 	err      error
 }
 
+type videoOptions struct {
+	audio  bool
+	smooth *bool
+}
+
 func videoFitSize(termCols, termRows, srcW, srcH int) (int, int) {
 	previewRows := int(float64(termRows)*previewHeightFraction) - 2
 	if previewRows < 4 {
@@ -93,22 +99,40 @@ func videoFitSize(termCols, termRows, srcW, srcH int) (int, int) {
 	return w, h
 }
 
-func startVideoPlayer(post api.Post, termCols, termRows int, audio bool) (*videoPlayer, error) {
+func videoRateFilter(rate float64, pixels int, smooth *bool) string {
+	switch {
+	case rate > videoMaxFPS:
+		return fmt.Sprintf("fps=%d", videoMaxFPS)
+	case smooth != nil && !*smooth:
+		return ""
+	case rate == 0:
+		return fmt.Sprintf("fps=%d", videoMaxFPS)
+	case rate >= videoMaxFPS-1:
+		return ""
+	case smooth == nil && pixels > interpolateMaxPixels:
+		return ""
+	default:
+		return fmt.Sprintf("minterpolate=fps=%d:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1", videoMaxFPS)
+	}
+}
+
+func startVideoPlayer(post api.Post, termCols, termRows int, opts videoOptions) (*videoPlayer, error) {
 	rawURL := post.FileURL()
 	w, h := videoFitSize(termCols, termRows, post.Width, post.Height)
-	filter := ""
+	scale := fmt.Sprintf("scale=%d:%d", w, h)
 	if post.Width <= 0 || post.Height <= 0 {
-		filter = fmt.Sprintf(
+		scale = fmt.Sprintf(
 			"scale=%d:%d:force_original_aspect_ratio=decrease,"+
-				"pad=%d:%d:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,format=rgba",
+				"pad=%d:%d:(ow-iw)/2:(oh-ih)/2:color=black",
 			w, h, w, h,
 		)
-	} else {
-		filter = fmt.Sprintf("scale=%d:%d,setsar=1,format=rgba", w, h)
 	}
-	if fps := sourceFPS(rawURL); fps <= 0 || fps > videoMaxFPS {
-		filter = fmt.Sprintf("fps=%d,%s", videoMaxFPS, filter)
+	parts := []string{scale}
+	if rate := videoRateFilter(sourceFPS(rawURL), w*h, opts.smooth); rate != "" {
+		parts = append(parts, rate)
 	}
+	parts = append(parts, "setsar=1", "format=rgba")
+	filter := strings.Join(parts, ",")
 	cmd := exec.Command(
 		"ffmpeg",
 		"-loglevel", "error",
@@ -134,7 +158,7 @@ func startVideoPlayer(post api.Post, termCols, termRows int, audio bool) (*video
 		width:  w,
 		height: h,
 		source: rawURL,
-		muted:  !audio,
+		muted:  !opts.audio,
 		frames: make(chan image.Image, 1),
 		done:   make(chan struct{}),
 	}
@@ -251,12 +275,38 @@ func isGIFURL(rawURL string) bool {
 	return strings.EqualFold(filepath.Ext(rawURL), ".gif")
 }
 
+var (
+	audioQualityOnce sync.Once
+	audioQualityArgs []string
+)
+
+func audioFilterArgs() []string {
+	audioQualityOnce.Do(func() {
+		soxr := []string{"-af", "aresample=resampler=soxr:precision=28"}
+		if ffmpegAccepts(soxr...) {
+			audioQualityArgs = soxr
+			return
+		}
+		audioQualityArgs = []string{"-af", "aresample=filter_size=64"}
+	})
+	return audioQualityArgs
+}
+
+func ffmpegAccepts(args ...string) bool {
+	cmd := exec.Command("ffmpeg", "-hide_banner", "-loglevel", "error",
+		"-f", "lavfi", "-i", "sine=d=0.01")
+	cmd.Args = append(cmd.Args, args...)
+	cmd.Args = append(cmd.Args, "-f", "null", "-")
+	return cmd.Run() == nil
+}
+
 func spawnAudio(rawURL string) *exec.Cmd {
 	path, err := exec.LookPath("ffplay")
 	if err != nil {
 		return nil
 	}
 	args := []string{"-loglevel", "error", "-nodisp", "-autoexit", "-vn", "-sn"}
+	args = append(args, audioFilterArgs()...)
 	if isHTTP(rawURL) {
 		args = append(args, "-user_agent", videoUserAgent)
 	}

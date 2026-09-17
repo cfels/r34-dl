@@ -65,6 +65,9 @@ func main() {
 	filterAI := flag.Bool("filter-ai", false, "hide AI generated posts")
 	noFilterAI := flag.Bool("no-filter-ai", false, "show AI generated posts")
 
+	interpolateOn := flag.Bool("interpolate", false, "always smooth videos below 60fps up to 60fps")
+	interpolateOff := flag.Bool("no-interpolate", false, "play videos at their own frame rate")
+
 	runTests := flag.Bool("run-tests", false, "run tests")
 
 	flag.Usage = func() {
@@ -79,6 +82,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  --no-audio                       mute video audio\n")
 		fmt.Fprintf(os.Stderr, "  --filter-ai                      hide AI generated posts\n")
 		fmt.Fprintf(os.Stderr, "  --no-filter-ai                   show AI generated posts\n")
+		fmt.Fprintf(os.Stderr, "  --interpolate                    smooth videos below 60fps (default: on for small previews)\n")
+		fmt.Fprintf(os.Stderr, "  --no-interpolate                 play videos at their own frame rate\n")
 		fmt.Fprintf(os.Stderr, "  --run-tests                      run tests\n")
 	}
 
@@ -114,6 +119,24 @@ func main() {
 			fmt.Println("AI generated posts will be filtered out (toggle with ctrl+a while searching)")
 		} else {
 			fmt.Println("AI generated posts are shown again")
+		}
+		return
+	}
+
+	if *interpolateOn || *interpolateOff {
+		cfg, err := conf.Load()
+		if err != nil {
+			log.Fatalf("failed to load config: %v", err)
+		}
+		value := *interpolateOn
+		cfg.Interpolate = &value
+		if err := conf.Save(cfg); err != nil {
+			log.Fatalf("failed to save config: %v", err)
+		}
+		if value {
+			fmt.Println("videos below 60fps will be smoothed to 60fps")
+		} else {
+			fmt.Println("videos play at their own frame rate")
 		}
 		return
 	}

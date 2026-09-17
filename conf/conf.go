@@ -13,6 +13,7 @@ type Config struct {
 	ActiveAPI     string   `json:"active_api"`
 	AudioEnabled  bool     `json:"audio_enabled,omitempty"`
 	FilterAI      bool     `json:"filter_ai,omitempty"`
+	Interpolate   *bool    `json:"interpolate,omitempty"`
 	SearchHistory []string `json:"search_history,omitempty"`
 }
 
