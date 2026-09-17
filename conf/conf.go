@@ -11,6 +11,8 @@ type Config struct {
 	UserID        string   `json:"user_id"`
 	AgeVerified   bool     `json:"age_verified"`
 	ActiveAPI     string   `json:"active_api"`
+	AudioEnabled  bool     `json:"audio_enabled,omitempty"`
+	FilterAI      bool     `json:"filter_ai,omitempty"`
 	SearchHistory []string `json:"search_history,omitempty"`
 }
 

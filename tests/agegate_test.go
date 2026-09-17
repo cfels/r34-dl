@@ -18,6 +18,9 @@ func (m *mockClient) SearchPosts(tags string, limit, page int) ([]api.Post, erro
 }
 func (m *mockClient) CountPosts(tags string) (int, error) { return 0, nil }
 func (m *mockClient) Name() string                        { return m.name }
+func (m *mockClient) Autocomplete(prefix string) ([]string, error) {
+	return nil, nil
+}
 
 func newTestModel() ui.Model {
 	sb := &mockClient{name: "safebooru"}

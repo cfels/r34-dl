@@ -56,6 +56,14 @@ func encodeImage(img image.Image) (string, error) {
 	return halfBlockEncode(img)
 }
 
+func previewRows(termRows int) int {
+	rows := int(float64(termRows)*previewHeightFraction) - 2
+	if rows < 4 {
+		rows = 4
+	}
+	return rows
+}
+
 func halfBlockEncode(img image.Image) (string, error) {
 	b := img.Bounds()
 	width, height := b.Dx(), b.Dy()
@@ -83,11 +91,7 @@ func renderImage(data []byte, termCols, termRows int) tea.Cmd {
 		if err != nil {
 			return imageFetchedMsg{err: fmt.Errorf("decode image: %w", err)}
 		}
-		previewRows := int(float64(termRows)*previewHeightFraction) - 2
-		if previewRows < 4 {
-			previewRows = 4
-		}
-		scaled := scaleToFit(img, termCols, previewRows)
+		scaled := scaleToFit(img, termCols, previewRows(termRows))
 		s, err := encodeImage(scaled)
 		if err != nil {
 			return imageFetchedMsg{err: fmt.Errorf("render: %w", err)}

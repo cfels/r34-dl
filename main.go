@@ -58,6 +58,13 @@ func main() {
 	clearHistory := flag.Bool("clear-history", false, "clear search history")
 	flag.BoolVar(clearHistory, "cls", false, "clear search history (short)")
 
+	audioOn := flag.Bool("audio", false, "play video audio (default off)")
+	flag.BoolVar(audioOn, "a", false, "play video audio (short)")
+	audioOff := flag.Bool("no-audio", false, "mute video audio")
+
+	filterAI := flag.Bool("filter-ai", false, "hide AI generated posts")
+	noFilterAI := flag.Bool("no-filter-ai", false, "show AI generated posts")
+
 	runTests := flag.Bool("run-tests", false, "run tests")
 
 	flag.Usage = func() {
@@ -68,10 +75,48 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  -l, --limit <N>                  max results to fetch (default 30)\n")
 		fmt.Fprintf(os.Stderr, "  -t, --tags <tags>                search tags (comma-separated)\n")
 		fmt.Fprintf(os.Stderr, "  -cls, --clear-history            clear search history\n")
+		fmt.Fprintf(os.Stderr, "  -a, --audio                      play video audio (default: off)\n")
+		fmt.Fprintf(os.Stderr, "  --no-audio                       mute video audio\n")
+		fmt.Fprintf(os.Stderr, "  --filter-ai                      hide AI generated posts\n")
+		fmt.Fprintf(os.Stderr, "  --no-filter-ai                   show AI generated posts\n")
 		fmt.Fprintf(os.Stderr, "  --run-tests                      run tests\n")
 	}
 
 	flag.Parse()
+
+	if *audioOn || *audioOff {
+		cfg, err := conf.Load()
+		if err != nil {
+			log.Fatalf("failed to load config: %v", err)
+		}
+		cfg.AudioEnabled = *audioOn
+		if err := conf.Save(cfg); err != nil {
+			log.Fatalf("failed to save config: %v", err)
+		}
+		if cfg.AudioEnabled {
+			fmt.Println("video audio enabled (press m while a video plays to toggle)")
+		} else {
+			fmt.Println("video audio disabled")
+		}
+		return
+	}
+
+	if *filterAI || *noFilterAI {
+		cfg, err := conf.Load()
+		if err != nil {
+			log.Fatalf("failed to load config: %v", err)
+		}
+		cfg.FilterAI = *filterAI
+		if err := conf.Save(cfg); err != nil {
+			log.Fatalf("failed to save config: %v", err)
+		}
+		if cfg.FilterAI {
+			fmt.Println("AI generated posts will be filtered out (toggle with ctrl+a while searching)")
+		} else {
+			fmt.Println("AI generated posts are shown again")
+		}
+		return
+	}
 
 	if *clearHistory {
 		cfg, err := conf.Load()

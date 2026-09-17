@@ -17,6 +17,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		if msg.String() == "p" && m.previewKeyRepeated() {
+			return m, nil
+		}
 		switch m.state {
 
 		case stateAgeGate:
@@ -46,9 +49,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case stateSearch:
 			m.cursorVisible = true
 			switch msg.Type {
+			case tea.KeyCtrlA:
+				if m.cfg.ActiveAPI == "rule34" {
+					m.cfg.FilterAI = !m.cfg.FilterAI
+					_ = conf.Save(m.cfg)
+				}
+				return m, nil
 			case tea.KeyCtrlC, tea.KeyEsc:
+				m.clearSuggestions()
 				return m, tea.Quit
 			case tea.KeyEnter:
+				if m.suggestPick && m.acceptSuggestion() {
+					return m, nil
+				}
 				if m.query != "" {
 					if len(m.history) == 0 || m.history[len(m.history)-1] != m.query {
 						m.history = append(m.history, m.query)
@@ -56,15 +69,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						_ = conf.Save(m.cfg)
 					}
 					m.historyIdx = len(m.history)
+					m.clearSuggestions()
 					return m, m.startSearch()
 				}
 			case tea.KeyUp:
+				if m.suggestPick {
+					m.suggestPick = false
+					m.suggestIdx = 0
+					return m, nil
+				}
+				m.suggestPick = false
 				if len(m.history) > 0 && m.historyIdx > 0 {
 					m.historyIdx--
 					m.query = m.history[m.historyIdx]
 					m.inputCursor = len([]rune(m.query))
 				}
+				return m, m.refreshSuggestions()
 			case tea.KeyDown:
+				m.suggestPick = false
 				if m.historyIdx < len(m.history)-1 {
 					m.historyIdx++
 					m.query = m.history[m.historyIdx]
@@ -74,14 +96,57 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.query = ""
 					m.inputCursor = 0
 				}
+				return m, m.refreshSuggestions()
+			case tea.KeyShiftUp:
+				if m.pickSuggestion(-1) {
+					return m, nil
+				}
+				return m, nil
+			case tea.KeyShiftDown:
+				if m.pickSuggestion(1) {
+					return m, nil
+				}
+				return m, nil
+			case tea.KeyShiftRight:
+				if m.pickSuggestion(1) {
+					return m, nil
+				}
+				return m, nil
+			case tea.KeyShiftLeft:
+				if m.pickSuggestion(-1) {
+					return m, nil
+				}
+				return m, nil
+			case tea.KeyCtrlP:
+				m.suggestPick = false
+				if len(m.history) > 0 && m.historyIdx > 0 {
+					m.historyIdx--
+					m.query = m.history[m.historyIdx]
+					m.inputCursor = len([]rune(m.query))
+				}
+				return m, m.refreshSuggestions()
+			case tea.KeyCtrlN:
+				m.suggestPick = false
+				if m.historyIdx < len(m.history)-1 {
+					m.historyIdx++
+					m.query = m.history[m.historyIdx]
+					m.inputCursor = len([]rune(m.query))
+				} else if m.historyIdx == len(m.history)-1 {
+					m.historyIdx = len(m.history)
+					m.query = ""
+					m.inputCursor = 0
+				}
+				return m, m.refreshSuggestions()
 			case tea.KeyLeft:
 				if m.inputCursor > 0 {
 					m.inputCursor--
 				}
+				return m, m.refreshSuggestions()
 			case tea.KeyRight:
 				if m.inputCursor < len([]rune(m.query)) {
 					m.inputCursor++
 				}
+				return m, m.refreshSuggestions()
 			case tea.KeyBackspace:
 				runes := []rune(m.query)
 				if m.inputCursor > 0 {
@@ -89,11 +154,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.query = string(runes)
 					m.inputCursor--
 				}
+				return m, m.refreshSuggestions()
 			case tea.KeySpace:
 				runes := []rune(m.query)
 				runes = append(runes[:m.inputCursor], append([]rune{' '}, runes[m.inputCursor:]...)...)
 				m.query = string(runes)
 				m.inputCursor++
+				return m, m.refreshSuggestions()
 			case tea.KeyTab:
 				if m.cfg.ActiveAPI == "rule34" {
 					m.switchAPI("safebooru")
@@ -102,11 +169,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.switchAPI("rule34")
 					}
 				}
+				return m, m.refreshSuggestions()
 			case tea.KeyRunes:
+				if len(msg.Runes) == 1 && msg.Runes[0] == 'Y' && m.acceptSuggestion() {
+					return m, nil
+				}
 				runes := []rune(m.query)
 				runes = append(runes[:m.inputCursor], append(msg.Runes, runes[m.inputCursor:]...)...)
 				m.query = string(runes)
 				m.inputCursor += len(msg.Runes)
+				return m, m.refreshSuggestions()
 			}
 			return m, nil
 
@@ -114,6 +186,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch msg.String() {
 			case "ctrl+c", "q":
 				return m, tea.Quit
+			case "ctrl+a":
+				if m.cfg.ActiveAPI == "rule34" {
+					m.cfg.FilterAI = !m.cfg.FilterAI
+					_ = conf.Save(m.cfg)
+					return m, m.startSearch()
+				}
+				return m, nil
 			case "tab":
 				if m.cfg.ActiveAPI == "rule34" {
 					m.switchAPI("safebooru")
@@ -135,20 +214,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.clampViewport()
 			case "p":
 				if len(m.posts) > 0 {
+					m.stopVideo()
 					m.viewerPost = m.posts[m.cursor]
 					m.viewerErr = ""
 					m.viewerImage = ""
-					m.videoFrame = ""
 					if isVideo(m.viewerPost) {
 						m.state = stateViewerLoading
-						fileURL := m.viewerPost.FileURL()
+						post := m.viewerPost
 						w, h := m.width, m.height
 						return m, func() tea.Msg {
-							vp, err := startVideoPlayer(fileURL, w, h)
+							vp, err := startVideoPlayer(post, w, h, m.cfg.AudioEnabled)
 							if err != nil {
 								return videoDoneMsg{err: err}
 							}
-							return struct{ vp *videoPlayer }{vp}
+							return videoStartedMsg{vp: vp}
 						}
 					}
 					m.state = stateViewerLoading
@@ -181,13 +260,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.ClearScreen
 
 		case stateVideoPlaying:
-			if m.video != nil {
-				_ = m.video.cmd.Process.Kill()
-				m.video = nil
+			if msg.String() == "m" && m.video != nil {
+				m.video.toggleMute()
+				m.cfg.AudioEnabled = !m.video.isMuted()
+				_ = conf.Save(m.cfg)
+				return m, nil
 			}
-			m.videoFrame = ""
+			m.stopVideo()
 			m.state = stateList
-			return m, tea.ClearScreen
+			return m, tea.Batch(tea.ExitAltScreen, tea.ClearScreen)
 		}
 
 	case singleDownloadMsg:
@@ -206,6 +287,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, renderImage(msg.data, m.width, m.height)
 
+	case suggestTickMsg:
+		if msg.gen != m.suggestGen || m.state != stateSearch {
+			return m, nil
+		}
+		return m, m.suggestLookup(m.suggestWord)
+
+	case suggestionsMsg:
+		if msg.gen != m.suggestGen || msg.word != m.suggestWord || m.state != stateSearch {
+			return m, nil
+		}
+		m.suggestions = msg.tags
+		if len(msg.tags) == 0 {
+			m.suggestIdx = 0
+		} else {
+			m.suggestIdx %= len(msg.tags)
+		}
+		return m, nil
+
 	case imageRenderedMsg:
 		if m.state == stateVideoPlaying {
 			m.videoFrame = msg.s
@@ -215,39 +314,48 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case struct{ vp *videoPlayer }:
+	case videoStartedMsg:
 		if msg.vp == nil {
 			m.viewerErr = "failed to start video player"
 			m.state = stateViewer
 			return m, nil
 		}
+		if m.video != nil || m.state != stateViewerLoading {
+			msg.vp.stop()
+			return m, nil
+		}
 		m.video = msg.vp
 		m.state = stateVideoPlaying
-		return m, nextFrame(m.video)
+		return m, tea.Batch(tea.EnterAltScreen, nextFrame(m.video))
 
 	case videoFrameMsg:
-		if m.state != stateVideoPlaying || m.video == nil {
+		if m.state != stateVideoPlaying || msg.vp == nil || msg.vp != m.video {
 			return m, nil
 		}
 		w, h := m.width, m.height
-		vp := m.video
 		return m, tea.Batch(
-			renderVideoFrame(msg.frame, w, h),
-			nextFrame(vp),
+			renderVideoFrame(msg.vp, msg.frame, w, h),
+			nextFrame(msg.vp),
 		)
 
-	case videoDoneMsg:
-		if m.video != nil {
-			_ = m.video.cmd.Process.Kill()
-			m.video = nil
+	case videoRenderedMsg:
+		if msg.vp != nil && msg.vp == m.video {
+			m.videoFrame = msg.s
 		}
+		return m, nil
+
+	case videoDoneMsg:
+		if msg.vp != nil && msg.vp != m.video {
+			return m, nil
+		}
+		m.stopVideo()
 		if msg.err != nil {
 			m.viewerErr = msg.err.Error()
 			m.state = stateViewer
 		} else {
 			m.state = stateList
 		}
-		return m, tea.ClearScreen
+		return m, tea.Batch(tea.ExitAltScreen, tea.ClearScreen)
 
 	case searchResultMsg:
 		m.state = stateList
@@ -282,7 +390,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, tea.Batch(
-			doCountTotal(m.client, m.query, msg.gen),
+			doCountTotal(m.client, m.apiTags(), msg.gen),
 			startCountTicker(msg.gen),
 		)
 

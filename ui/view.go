@@ -95,6 +95,20 @@ func (m Model) apiLabel() string {
 	return apiSBStyle.Render("[safebooru]")
 }
 
+func switchLine(on bool) string {
+	knob := "───────●"
+	label := "off"
+	style := dimStyle
+	if on {
+		knob = "●───────"
+		label = " on"
+		style = selectedStyle
+	}
+	return inputStyle.Render("   Filter AI posts ") +
+		style.Render("[ "+knob+" ]") +
+		dimStyle.Render(" "+label+"  ctrl+a")
+}
+
 func (m Model) View() string {
 	switch m.state {
 	case stateAgeGate:
@@ -120,11 +134,11 @@ func (m Model) View() string {
 
 		var yesBox, noBox string
 		if m.ageGateCursor == 0 {
-			yesBox = activeYesBox.Render("yes  (rule34)")
-			noBox = inactiveBox.Render("no  (safebooru)")
+			yesBox = activeYesBox.Render("yes (rule34)")
+			noBox = inactiveBox.Render("no (safebooru)")
 		} else {
-			yesBox = inactiveBox.Render("yes  (rule34)")
-			noBox = activeNoBox.Render("no  (safebooru)")
+			yesBox = inactiveBox.Render("yes (rule34)")
+			noBox = activeNoBox.Render("no (safebooru)")
 		}
 
 		s := titleStyle.Render("r34-dl") + "\n\n"
@@ -161,7 +175,30 @@ func (m Model) View() string {
 		if m.inputCursor+1 < len(runes) {
 			after = inputStyle.Render(string(runes[m.inputCursor+1:]))
 		}
-		s += m.apiLabel() + " " + titleStyle.Render("tags: ") + before + cursorRendered + after + "\n\n"
+		ghost := m.ghostSuggestion()
+		ghostRendered := ""
+		if ghost != "" {
+			ghostRendered = dimStyle.Render(ghost)
+		}
+		s += m.apiLabel() + " " + titleStyle.Render("tags: ") + before + cursorRendered + ghostRendered + after + "\n"
+		if tags := m.nextSuggestions(); len(tags) > 0 {
+			current := tags[0]
+			if len(tags) > maxShownTags {
+				tags = tags[:maxShownTags]
+			}
+			line := selectedStyle.Render(current)
+			if m.suggestPick {
+				line = selectedStyle.Render("▸ " + current)
+			}
+			if len(tags) > 1 {
+				line += dimStyle.Render(" · " + strings.Join(tags[1:], " · "))
+			}
+			s += dimStyle.Render("   Y → ") + line + "\n"
+		}
+		if m.cfg.ActiveAPI == "rule34" {
+			s += switchLine(m.cfg.FilterAI) + "\n"
+		}
+		s += "\n"
 		if m.cfg.ActiveAPI == "rule34" && m.cfg.APIKey == "" {
 			s += errorStyle.Render("   rule34 now requires an API key") + "\n"
 			s += dimStyle.Render(" make sure to get one from thier website, then use: ./r34-dl -apik") + "\n\n"
@@ -169,7 +206,11 @@ func (m Model) View() string {
 		if m.err != "" {
 			s += errorStyle.Render(m.err) + "\n\n"
 		}
-		s += dimStyle.Render("tab: switch api · enter: search · ctrl+c: quit")
+		hint := "tab: switch api · enter: search · shift+↓/→/←: pick tag · enter: accept · ↑: back"
+		if m.suggestPick {
+			hint = "enter: accept picked tag · shift+↓/→/←: move · ↑: back to typing"
+		}
+		s += dimStyle.Render(hint)
 		return s
 
 	case stateSearching:
@@ -185,6 +226,10 @@ func (m Model) View() string {
 			end = len(m.posts)
 		}
 		s := titleStyle.Render("Search Results:") + "  " + m.apiLabel() + "\n\n"
+		if m.aiFilterOn() {
+			s = titleStyle.Render("Search Results:") + "  " + m.apiLabel() +
+				"  " + dimStyle.Render("[no AI]") + "\n\n"
+		}
 		for i := m.offset; i < end; i++ {
 			s += renderPostLine(m.posts[i], m.width, i == m.cursor) + "\n"
 		}
@@ -208,9 +253,13 @@ func (m Model) View() string {
 		return dimStyle.Render(fmt.Sprintf("fetching #%d ...", m.viewerPost.ID))
 
 	case stateVideoPlaying:
+		audio := "audio: on"
+		if m.video == nil || m.video.isMuted() {
+			audio = "audio: off"
+		}
 		status := "\n" + dimStyle.Render(fmt.Sprintf(
-			"▶ #%d  %dx%d  any key: stop",
-			m.viewerPost.ID, m.viewerPost.Width, m.viewerPost.Height,
+			"▶ #%d  %dx%d  %s  ·  m: toggle audio  ·  any key: stop",
+			m.viewerPost.ID, m.viewerPost.Width, m.viewerPost.Height, audio,
 		))
 		if m.videoFrame != "" {
 			return m.videoFrame + status

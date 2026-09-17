@@ -46,11 +46,22 @@ type singleDownloadMsg struct {
 	err  error
 }
 
+type videoStartedMsg struct {
+	vp *videoPlayer
+}
+
 type videoFrameMsg struct {
+	vp    *videoPlayer
 	frame image.Image
 }
 
+type videoRenderedMsg struct {
+	vp *videoPlayer
+	s  string
+}
+
 type videoDoneMsg struct {
+	vp  *videoPlayer
 	err error
 }
 

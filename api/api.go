@@ -15,6 +15,7 @@ import (
 type Client interface {
 	SearchPosts(tags string, limit, page int) ([]Post, error)
 	CountPosts(tags string) (int, error)
+	Autocomplete(prefix string) ([]string, error)
 	Name() string
 }
 
@@ -102,6 +103,75 @@ func newHTTPClient() *http.Client {
 	return &http.Client{Timeout: 15 * time.Second}
 }
 
+type autoEntry struct {
+	Value string `json:"value"`
+	Label string `json:"label"`
+}
+
+func fetchAutocomplete(client *http.Client, endpoint, prefix, userAgent string) ([]string, error) {
+	q := url.Values{}
+	q.Set("q", prefix)
+	req, err := http.NewRequest(http.MethodGet, endpoint+"?"+q.Encode(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("couldn't build request: %w", err)
+	}
+	req.Header.Set("User-Agent", userAgent)
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("bad status %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("couldn't read response: %w", err)
+	}
+	return parseAutocomplete(body)
+}
+
+func parseAutocomplete(body []byte) ([]string, error) {
+	trimmed := strings.TrimSpace(string(body))
+	if trimmed == "" || trimmed == "null" {
+		return nil, nil
+	}
+	var entries []autoEntry
+	if err := json.Unmarshal(body, &entries); err == nil {
+		tags := make([]string, 0, len(entries))
+		for _, e := range entries {
+			tag := strings.TrimSpace(e.Value)
+			if tag == "" {
+				tag = stripTagCount(e.Label)
+			}
+			if tag != "" {
+				tags = append(tags, tag)
+			}
+		}
+		return tags, nil
+	}
+	var plain []string
+	if err := json.Unmarshal(body, &plain); err == nil {
+		return plain, nil
+	}
+	return nil, fmt.Errorf("couldn't parse response")
+}
+
+func stripTagCount(label string) string {
+	label = strings.TrimSpace(label)
+	open := strings.LastIndex(label, " (")
+	if open < 0 || !strings.HasSuffix(label, ")") {
+		return label
+	}
+	count := label[open+2 : len(label)-1]
+	for _, r := range count {
+		if r < '0' || r > '9' {
+			return label
+		}
+	}
+	return strings.TrimSpace(label[:open])
+}
+
 type SafebooruClient struct {
 	http *http.Client
 }
@@ -111,6 +181,10 @@ func NewSafebooruClient() *SafebooruClient {
 }
 
 func (c *SafebooruClient) Name() string { return "safebooru" }
+
+func (c *SafebooruClient) Autocomplete(prefix string) ([]string, error) {
+	return fetchAutocomplete(c.http, "https://safebooru.org/autocomplete.php", prefix, "r34-dl/safebooru-client")
+}
 
 func (c *SafebooruClient) CountPosts(tags string) (int, error) {
 	const base = "https://safebooru.org/index.php"
@@ -203,6 +277,10 @@ func NewRule34Client(userID, apiKey string) *Rule34Client {
 }
 
 func (c *Rule34Client) Name() string { return "rule34" }
+
+func (c *Rule34Client) Autocomplete(prefix string) ([]string, error) {
+	return fetchAutocomplete(c.http, "https://api.rule34.xxx/autocomplete.php", prefix, "r34-dl/rule34-client")
+}
 
 type r34Post struct {
 	ID        int        `json:"id"`

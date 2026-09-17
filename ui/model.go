@@ -3,6 +3,7 @@ package ui
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"moxiu/r34-dl/api"
@@ -31,6 +32,7 @@ const suffixReserve = 14
 const countRefreshInterval = 5 * time.Second
 const previewHeightFraction = 0.75
 const reservedLines = 4
+const aiTag = "ai_generated"
 
 type Model struct {
 	cfg        conf.Config
@@ -72,9 +74,35 @@ type Model struct {
 	historyIdx    int
 	inputCursor   int
 	cursorVisible bool
+
+	previewKeyAt time.Time
+
+	suggestions  []string
+	suggestStart int
+	suggestWord  string
+	suggestDash  bool
+	suggestIdx   int
+	suggestDone  string
+	suggestPick  bool
+	suggestGen   int
 }
 
 func (m Model) Cfg() conf.Config { return m.cfg }
+
+func (m Model) apiTags() string {
+	tags := strings.TrimSpace(m.query)
+	if !m.aiFilterOn() {
+		return tags
+	}
+	if tags == "" {
+		return "-" + aiTag
+	}
+	return tags + " -" + aiTag
+}
+
+func (m Model) aiFilterOn() bool {
+	return m.cfg.FilterAI && m.cfg.ActiveAPI == "rule34"
+}
 
 func NewModel(sbClient, r34Client api.Client, cfg conf.Config, initialTags string, limit int) Model {
 	active := sbClient
@@ -114,18 +142,19 @@ func NewModel(sbClient, r34Client api.Client, cfg conf.Config, initialTags strin
 }
 
 func (m Model) Init() tea.Cmd {
-	if m.state == stateSearching {
+	cmds := []tea.Cmd{tea.ClearScreen}
+	switch {
+	case m.state == stateSearching:
 		gen := m.searchGen
-		return tea.Batch(
-			doSearch(m.client, m.query, m.limit, 0),
-			doCountTotal(m.client, m.query, gen),
+		cmds = append(cmds,
+			doSearch(m.client, m.apiTags(), m.limit, 0),
+			doCountTotal(m.client, m.apiTags(), gen),
 			startCountTicker(gen),
 		)
+	case m.state == stateSearch:
+		cmds = append(cmds, startBlink())
 	}
-	if m.state == stateSearch {
-		return startBlink()
-	}
-	return nil
+	return tea.Batch(cmds...)
 }
 
 func (m Model) visibleRows() int {
@@ -152,7 +181,7 @@ func (m *Model) clampViewport() tea.Cmd {
 	if m.cursor == len(m.posts)-1 && !m.loadingMore && !m.noMore {
 		m.loadingMore = true
 		nextPage := m.page + 1
-		cmd = doLoadMore(m.client, m.query, m.limit, nextPage)
+		cmd = doLoadMore(m.client, m.apiTags(), m.limit, nextPage)
 	}
 	rows := m.visibleRows()
 	if m.cursor < m.offset {
@@ -195,8 +224,25 @@ func (m *Model) startSearch() tea.Cmd {
 	m.totalKnown = false
 	m.totalCount = 0
 	return tea.Batch(
-		doSearch(m.client, m.query, m.limit, 0),
-		doCountTotal(m.client, m.query, gen),
+		doSearch(m.client, m.apiTags(), m.limit, 0),
+		doCountTotal(m.client, m.apiTags(), gen),
 		startCountTicker(gen),
 	)
+}
+
+func (m *Model) stopVideo() {
+	if m.video != nil {
+		m.video.stop()
+		m.video = nil
+	}
+	m.videoFrame = ""
+}
+
+const previewRepeatGap = 220 * time.Millisecond
+
+func (m *Model) previewKeyRepeated() bool {
+	now := time.Now()
+	repeated := !m.previewKeyAt.IsZero() && now.Sub(m.previewKeyAt) < previewRepeatGap
+	m.previewKeyAt = now
+	return repeated
 }
