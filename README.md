@@ -9,6 +9,9 @@ a rule34/safebooru downloader with alot of feature's, Why? cuz i didn't saw any 
 > [!NOTE]  
 > R34 updated thier API and now u need API key, read [Obtaining API key](#obatining-api-key), what about Safebooru? well Safebooru doesn't need one so u can just jump in and use the tool (unless u want rule34 access then you'll need API key)
 
+### Features
+( add later )
+
 ### Donwloading
 you can download pre-built binary from [Release's](https://github.com/cfels/r34-dl/releases)
 
@@ -39,19 +42,6 @@ Options:
 
 video previews are muted by default, turn audio on with `r34-dl -a` (or disable it again with `--no-audio`),
 while a video plays `m` toggles audio and the choice is remembered for the next video.
-
-### Tag predictions
-while typing tags the search bar suggests booru tags: the best match is shown as dimmed text after the
-cursor, `↑`/`↓` cycle through the suggestions (the line under the bar always shows the current one
-first, followed by the others) and `Y` — or `→` at the end of the line — accepts the highlighted tag.
-`ctrl+p`/`ctrl+n` recall search history. predictions come from the booru autocomplete endpoint and
-from your own search history, so they also work offline.
-
-### Filtering AI posts
-rule34 only, since that's the site that has the toggle: the switch under the tag bar hides AI generated
-posts by excluding the `ai_generated` tag from every search, and it disappears while safebooru is
-active. press `ctrl+a` to flip it while searching or while looking at results (results are re-fetched),
-and the choice is remembered — `r34-dl --filter-ai` / `--no-filter-ai` set it from the command line.
 
 ### Obatining API key
 Here's how to get one

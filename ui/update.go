@@ -333,14 +333,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		w, h := m.width, m.height
-		return m, tea.Batch(
-			renderVideoFrame(msg.vp, msg.frame, w, h),
-			nextFrame(msg.vp),
-		)
+		return m, renderVideoFrame(msg.vp, msg.frame, w, h)
 
 	case videoRenderedMsg:
 		if msg.vp != nil && msg.vp == m.video {
 			m.videoFrame = msg.s
+			return m, nextFrame(msg.vp)
 		}
 		return m, nil
 

@@ -27,7 +27,7 @@ const (
 
 const (
 	kittyGraphicsPrefix = "\x1b_Ga=T"
-	kittyImageIDPrefix  = "\x1b_Ga=T,f=100,i=1,q=2,m=1;"
+	kittyTransmitPrefix = "\x1b_Ga=T,f=100,m=1;"
 )
 
 var videoExts = map[string]bool{
@@ -61,6 +61,9 @@ type videoPlayer struct {
 	audio     *exec.Cmd
 	muted     bool
 	audioOnce sync.Once
+
+	idMu     sync.Mutex
+	frameSeq int
 
 	stopOnce sync.Once
 	waitOnce sync.Once
@@ -115,8 +118,8 @@ func startVideoPlayer(post api.Post, termCols, termRows int, audio bool) (*video
 	if isHTTP(rawURL) {
 		cmd.Args = append(cmd.Args, "-user_agent", videoUserAgent)
 	}
-	if isGIFURL(rawURL) {
-		cmd.Args = append(cmd.Args, "-ignore_loop", "1")
+	if isGIFURL(rawURL) || strings.EqualFold(filepath.Ext(post.Image), ".gif") {
+		cmd.Args = append(cmd.Args, "-stream_loop", "-1")
 	}
 	cmd.Args = append(cmd.Args,
 		"-i", rawURL,
@@ -403,13 +406,30 @@ func renderVideoFrame(vp *videoPlayer, img image.Image, termCols, termRows int) 
 		if err != nil {
 			return videoDoneMsg{vp: vp, err: fmt.Errorf("render frame: %w", err)}
 		}
-		return videoRenderedMsg{vp: vp, s: reuseKittyImage(s)}
+		return videoRenderedMsg{vp: vp, s: swapKittyImage(vp, s)}
 	}
 }
 
-func reuseKittyImage(s string) string {
-	if !strings.Contains(s, kittyGraphicsPrefix) {
+func swapKittyImage(vp *videoPlayer, s string) string {
+	if !strings.Contains(s, kittyTransmitPrefix) {
 		return s
 	}
-	return strings.Replace(s, "\x1b_Ga=T,f=100,m=1;", kittyImageIDPrefix, 1)
+	cur, prev := vp.kittyImageIDs()
+	s = strings.Replace(s, kittyTransmitPrefix, kittyTransmit(cur), 1)
+	return s + kittyDeleteImage(prev)
+}
+
+func kittyTransmit(id int) string {
+	return fmt.Sprintf("\x1b_Ga=T,f=100,i=%d,q=2,m=1;", id)
+}
+
+func kittyDeleteImage(id int) string {
+	return fmt.Sprintf("\x1b_Ga=d,d=I,i=%d,q=2;\x1b\\", id)
+}
+
+func (vp *videoPlayer) kittyImageIDs() (int, int) {
+	vp.idMu.Lock()
+	defer vp.idMu.Unlock()
+	vp.frameSeq++
+	return 1 + vp.frameSeq%2, 1 + (vp.frameSeq+1)%2
 }

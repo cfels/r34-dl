@@ -189,18 +189,29 @@ func TestVideoAudioToggle(t *testing.T) {
 	}
 }
 
-func TestVideoFrameReusesKittyImage(t *testing.T) {
+func TestVideoFrameSwapsKittyImage(t *testing.T) {
+	vp := &videoPlayer{}
 	img := image.NewRGBA(image.Rect(0, 0, 64, 32))
-	msg := renderVideoFrame(&videoPlayer{}, img, 80, 24)()
-	rendered, ok := msg.(videoRenderedMsg)
+	first, ok := renderVideoFrame(vp, img, 80, 24)().(videoRenderedMsg)
 	if !ok {
-		t.Fatalf("renderVideoFrame returned %T", msg)
+		t.Fatal("renderVideoFrame did not return a rendered frame")
 	}
-	if !strings.Contains(rendered.s, kittyGraphicsPrefix) {
+	if !strings.Contains(first.s, kittyGraphicsPrefix) {
 		t.Skip("terminal graphics encoder is not kitty")
 	}
-	if !strings.Contains(rendered.s, kittyImageIDPrefix) {
-		t.Error("kitty frames should reuse a stable image id to avoid flashing")
+	second, ok := renderVideoFrame(vp, img, 80, 24)().(videoRenderedMsg)
+	if !ok {
+		t.Fatal("renderVideoFrame did not return a rendered frame")
+	}
+
+	if !strings.Contains(first.s, kittyTransmit(2)) || !strings.Contains(first.s, kittyDeleteImage(1)) {
+		t.Errorf("first frame should draw image 2 and drop image 1")
+	}
+	if !strings.Contains(second.s, kittyTransmit(1)) || !strings.Contains(second.s, kittyDeleteImage(2)) {
+		t.Errorf("second frame should draw image 1 and drop image 2")
+	}
+	if strings.Contains(first.s, "\x1b_Ga=d,i=") {
+		t.Error("delete must target the image id with d=I, d defaults to wiping every placement")
 	}
 }
 
@@ -244,16 +255,33 @@ func TestMuteKeyTogglesAudioPreference(t *testing.T) {
 	}
 }
 
-func TestGIFPlaysOnce(t *testing.T) {
+func TestGIFKeepsLooping(t *testing.T) {
 	if !isGIFURL("https://example.org/a/b.gif?x=1") {
 		t.Fatal("gif url with query string should be detected")
 	}
-	frames, elapsed := playClip(t, makeTestGIF(t, 2))
-	if frames == 0 {
-		t.Fatal("gif produced no frames")
+	post := api.Post{Image: "loop.gif", FileURL_: makeTestGIF(t, 1)}
+	vp, err := startVideoPlayer(post, 80, 24, false)
+	if err != nil {
+		t.Fatalf("startVideoPlayer: %v", err)
 	}
-	if elapsed > 6*time.Second {
-		t.Errorf("looping gif played for %v, want a single pass", elapsed)
+	defer vp.stop()
+
+	start := time.Now()
+	frames := 0
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case _, ok := <-vp.frames:
+			if !ok {
+				t.Fatalf("gif stopped after %d frames in %v, want it to loop", frames, time.Since(start))
+			}
+			frames++
+		case <-deadline:
+			if frames < 10 {
+				t.Fatalf("only %d frames in %v", frames, time.Since(start))
+			}
+			return
+		}
 	}
 }
 
