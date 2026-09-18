@@ -164,15 +164,7 @@ func main() {
 	}
 
 	if *runTests {
-		sb := api.NewSafebooruClient()
-		r34 := api.NewRule34Client("", "")
-		cfg := conf.Config{AgeVerified: false, ActiveAPI: "safebooru"}
-		p := tea.NewProgram(ui.NewModel(sb, r34, cfg, "", 30))
-		if _, err := p.Run(); err != nil {
-			fmt.Println("err!", err)
-			os.Exit(1)
-		}
-		return
+		os.Exit(runTestSuites(flag.Args()))
 	}
 
 	if *addKey {

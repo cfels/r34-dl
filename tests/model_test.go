@@ -15,8 +15,25 @@ func TestInitClearsTerminal(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("init should clear whatever was on the terminal before")
 	}
-	msg := cmd()
-	if msg != tea.ClearScreen() {
-		t.Fatalf("init = %T, want the clear-screen command", msg)
+	msg, ok := runCmd(cmd, cmdTimeout)
+	if !ok {
+		t.Fatal("init command did not return in time")
+	}
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("init = %T, want a batch of commands", msg)
+	}
+	cleared := false
+	for _, sub := range batch {
+		if sub == nil {
+			continue
+		}
+		got, ok := runCmd(sub, cmdTimeout)
+		if ok && got == tea.ClearScreen() {
+			cleared = true
+		}
+	}
+	if !cleared {
+		t.Error("init batch should clear the terminal")
 	}
 }

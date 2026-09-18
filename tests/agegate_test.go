@@ -50,19 +50,6 @@ func sendKey(m ui.Model, key string) ui.Model {
 	return updated.(ui.Model)
 }
 
-func preview(t *testing.T, label, view string) {
-	t.Helper()
-	t.Logf("\n┌─ %s %s\n%s\n└%s", label, line(60-len(label)), view, line(62))
-}
-
-func line(n int) string {
-	r := make([]rune, n)
-	for i := range r {
-		r[i] = '─'
-	}
-	return string(r)
-}
-
 func TestAgeGate_InitialState(t *testing.T) {
 	m := newTestModel()
 	view := m.View()
@@ -161,16 +148,4 @@ func TestAgeGate_SkippedWhenAlreadyVerified(t *testing.T) {
 	if contains(m.View(), "are you 18") {
 		t.Error("age gate should be skipped")
 	}
-}
-
-func contains(s, sub string) bool {
-	if len(sub) == 0 {
-		return true
-	}
-	for i := 0; i <= len(s)-len(sub); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
 }
