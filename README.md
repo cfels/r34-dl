@@ -71,8 +71,8 @@ ur DONE! u can access r34-dl (rule34 option)
   </tr>
 </table>
 
-### Constributing
-Feel free to constribue, i'll should accept most of the patches.
+### Contributing
+Feel free to contribute by sumbiting a **[PR](https://github.com/cfels/r34-dl/pulls)** or an **[Issue](https://github.com/cfels/r34-dl/issues)**, i will probably accept yall pull requests, or if u decide to suggest something in Issue's tab that's worth fixing or adding.
 
 ### License
-This Project use's [MIT License](https://github.com/cfels/r34-dl/blob/dev/LICENSE) so make sure to follow it!
+This Project uses [MIT License](https://github.com/cfels/r34-dl/blob/dev/LICENSE) so make sure to follow it!
