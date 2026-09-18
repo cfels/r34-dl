@@ -115,7 +115,7 @@ func TestVersionInfoFallsBackWhenOffline(t *testing.T) {
 
 func TestSearchViewShowsVersionLine(t *testing.T) {
 	client := &recordingClient{}
-	m := NewModel(client, client, conf.Config{AgeVerified: true, ActiveAPI: "safebooru"}, "", 30)
+	m := NewModel(testClients(client), conf.Config{AgeVerified: true, ActiveAPI: "safebooru"}, "", 30)
 	m.width, m.height = 100, 30
 	m.state = stateSearch
 	m.release = versionInfo{version: "1.3", commit: "dae6e6e"}

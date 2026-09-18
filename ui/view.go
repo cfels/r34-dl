@@ -37,6 +37,9 @@ var (
 	scrollStyle   = lipgloss.NewStyle().Foreground(mochaBlue)
 	apiR34Style   = lipgloss.NewStyle().Foreground(mochaRed).Bold(true)
 	apiSBStyle    = lipgloss.NewStyle().Foreground(mochaGreen).Bold(true)
+	apiPHStyle    = lipgloss.NewStyle().Foreground(mochaPeach).Bold(true)
+	apiXVStyle    = lipgloss.NewStyle().Foreground(mochaYellow).Bold(true)
+	apiXHStyle    = lipgloss.NewStyle().Foreground(mochaBlue).Bold(true)
 )
 
 func renderPostLine(p api.Post, width int, selected bool) string {
@@ -44,6 +47,13 @@ func renderPostLine(p api.Post, width int, selected bool) string {
 	prefix := "  "
 	if selected {
 		prefix = "> "
+	}
+	prefixRendered := prefix
+	if selected {
+		prefixRendered = cursorStyle.Render(prefix)
+	}
+	if p.Title != "" {
+		return prefixRendered + idStyle.Render(idPart) + "  " + renderTitle(p.Title, width, selected) + durationSuffix(p.Duration)
 	}
 	tags := strings.Fields(p.Tags)
 	budget := width - len(prefix) - len(idPart) - 3 - suffixReserve
@@ -81,16 +91,43 @@ func renderPostLine(p api.Post, width int, selected bool) string {
 	if more != "" {
 		moreRendered = moreTagStyle.Render(more)
 	}
-	prefixRendered := prefix
-	if selected {
-		prefixRendered = cursorStyle.Render(prefix)
-	}
 	return prefixRendered + idRendered + "  " + tagsRendered + moreRendered
 }
 
+func renderTitle(title string, width int, selected bool) string {
+	budget := width - len("  ") - 12 - suffixReserve
+	if budget < 10 {
+		budget = 10
+	}
+	runes := []rune(strings.TrimSpace(title))
+	if len(runes) > budget {
+		title = string(runes[:budget]) + "…"
+	} else {
+		title = string(runes)
+	}
+	if selected {
+		return selectedStyle.Render(title)
+	}
+	return tagStyle.Render(title)
+}
+
+func durationSuffix(duration string) string {
+	if duration == "" {
+		return ""
+	}
+	return moreTagStyle.Render("  " + duration)
+}
+
 func (m Model) apiLabel() string {
-	if m.cfg.ActiveAPI == "rule34" {
+	switch m.cfg.ActiveAPI {
+	case "rule34":
 		return apiR34Style.Render("[rule34]")
+	case "pornhub":
+		return apiPHStyle.Render("[pornhub]")
+	case "xvideos":
+		return apiXVStyle.Render("[xvideos]")
+	case "xhamster":
+		return apiXHStyle.Render("[xhamster]")
 	}
 	return apiSBStyle.Render("[safebooru]")
 }
@@ -198,7 +235,7 @@ func (m Model) View() string {
 		if m.err != "" {
 			s += errorStyle.Render(m.err) + "\n\n"
 		}
-		hint := "tab: switch api · enter: search · shift+↓/→/←: pick tag · enter: accept · ↑: back"
+		hint := "tab: switch site · shift+tab: back · enter: search · shift+↓/→/←: pick tag · enter: accept · ↑: back"
 		if m.suggestPick {
 			hint = "enter: accept picked tag · shift+↓/→/←: move · ↑: back to typing"
 		}
@@ -210,7 +247,8 @@ func (m Model) View() string {
 
 	case stateList:
 		if len(m.posts) == 0 {
-			return "no results\n\n" + dimStyle.Render("/: new search · q: quit")
+			return titleStyle.Render("Search Results:") + "  " + m.apiLabel() +
+				"\n\nno results\n\n" + dimStyle.Render("/: new search · tab: switch site · q: quit")
 		}
 		rows := m.visibleRows()
 		end := m.offset + rows
@@ -238,7 +276,7 @@ func (m Model) View() string {
 			countLabel += dimStyle.Render(" (end)")
 		}
 		s += "\n" + scrollStyle.Render(countLabel)
-		s += "  " + dimStyle.Render("↑/↓·j/k: move · p: preview · enter: download · tab: switch api · /: search · q: quit")
+		s += "  " + dimStyle.Render("↑/↓·j/k: move · p: preview · enter: download · tab: switch site · /: search · q: quit")
 		return s
 
 	case stateViewerLoading:
@@ -250,8 +288,8 @@ func (m Model) View() string {
 			audio = "audio: off"
 		}
 		status := "\n" + dimStyle.Render(fmt.Sprintf(
-			"▶ #%d  %dx%d  %s  ·  m: toggle audio  ·  any key: stop",
-			m.viewerPost.ID, m.viewerPost.Width, m.viewerPost.Height, audio,
+			"▶ #%d  %s  %s  ·  m: toggle audio  ·  any key: stop",
+			m.viewerPost.ID, postSize(m.viewerPost), audio,
 		))
 		if m.videoFrame != "" {
 			return m.videoFrame + status
@@ -263,8 +301,8 @@ func (m Model) View() string {
 			return errorStyle.Render(m.viewerErr) + "\n\n" + dimStyle.Render("any key: back")
 		}
 		status := "\n" + dimStyle.Render(fmt.Sprintf(
-			"#%d  %dx%d  any key / space: back",
-			m.viewerPost.ID, m.viewerPost.Width, m.viewerPost.Height,
+			"#%d  %s  any key / space: back",
+			m.viewerPost.ID, postSize(m.viewerPost),
 		))
 		if m.viewerImage != "" {
 			return m.viewerImage + status
@@ -280,4 +318,14 @@ func (m Model) View() string {
 			m.done, m.failed, dimStyle.Render("/: new search · q: quit"))
 	}
 	return ""
+}
+
+func postSize(p api.Post) string {
+	if p.Duration != "" {
+		return p.Duration
+	}
+	if p.Video {
+		return "video"
+	}
+	return fmt.Sprintf("%dx%d", p.Width, p.Height)
 }

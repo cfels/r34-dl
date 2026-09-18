@@ -46,7 +46,10 @@ func newHarness(cfg conf.Config, initialTags string) *harness {
 	return &harness{
 		sb:  sb,
 		r34: r34,
-		m:   ui.NewModel(sb, r34, cfg, initialTags, 30),
+		m: ui.NewModel(map[string]api.Client{
+			"safebooru": sb,
+			"rule34":    r34,
+		}, cfg, initialTags, 30),
 	}
 }
 
@@ -105,6 +108,8 @@ func keyMsg(name string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyEnter}
 	case "tab":
 		return tea.KeyMsg{Type: tea.KeyTab}
+	case "shift+tab":
+		return tea.KeyMsg{Type: tea.KeyShiftTab}
 	case "left":
 		return tea.KeyMsg{Type: tea.KeyLeft}
 	case "right":

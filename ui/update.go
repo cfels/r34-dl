@@ -37,13 +37,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "enter", " ":
 				m.cfg.AgeVerified = true
 				if m.ageGateCursor == 0 {
-					m.cfg.ActiveAPI = "rule34"
-					m.client = m.r34Client
+					m.switchAPI("rule34")
 				} else {
-					m.cfg.ActiveAPI = "safebooru"
-					m.client = m.sbClient
+					m.switchAPI("safebooru")
 				}
-				_ = conf.Save(m.cfg)
 				m.state = stateSearch
 				m.cursorVisible = true
 				return m, startBlink()
@@ -168,13 +165,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.inputCursor++
 				return m, m.refreshSuggestions()
 			case tea.KeyTab:
-				if m.cfg.ActiveAPI == "rule34" {
-					m.switchAPI("safebooru")
-				} else {
-					if m.cfg.AgeVerified {
-						m.switchAPI("rule34")
-					}
-				}
+				m.cycleAPI(1)
+				return m, m.refreshSuggestions()
+			case tea.KeyShiftTab:
+				m.cycleAPI(-1)
 				return m, m.refreshSuggestions()
 			case tea.KeyRunes:
 				if len(msg.Runes) == 1 && msg.Runes[0] == 'Y' && m.acceptSuggestion() {
@@ -200,11 +194,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			case "tab":
-				if m.cfg.ActiveAPI == "rule34" {
-					m.switchAPI("safebooru")
-				} else if m.cfg.AgeVerified {
-					m.switchAPI("rule34")
-				}
+				m.cycleAPI(1)
+				return m, m.startSearch()
+			case "shift+tab":
+				m.cycleAPI(-1)
 				return m, m.startSearch()
 			case "up", "k":
 				m.cursor--
@@ -228,11 +221,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.state = stateViewerLoading
 						post := m.viewerPost
 						w, h := m.width, m.height
+						opts := videoOptions{
+							audio:  m.cfg.AudioEnabled,
+							smooth: m.smoothVideos(),
+						}
 						return m, func() tea.Msg {
-							vp, err := startVideoPlayer(post, w, h, videoOptions{
-								audio:  m.cfg.AudioEnabled,
-								smooth: m.smoothVideos(),
-							})
+							vp, err := startVideoPlayer(post, w, h, opts)
 							if err != nil {
 								return videoDoneMsg{err: err}
 							}

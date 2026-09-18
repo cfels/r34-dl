@@ -16,8 +16,53 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+const (
+	cellW = 8
+	cellH = 16
+
+	previewWidthFraction  = 0.64
+	previewHeightFraction = 0.64
+	previewMinCols        = 30
+	previewMaxCols        = 84
+	previewMinRows        = 8
+	previewMaxRows        = 21
+)
+
+func previewCols(termCols int) int {
+	cols := int(float64(termCols) * previewWidthFraction)
+	if cols > previewMaxCols {
+		cols = previewMaxCols
+	}
+	if cols < previewMinCols {
+		cols = previewMinCols
+	}
+	if limit := termCols - 2; cols > limit {
+		cols = limit
+	}
+	if cols < 8 {
+		cols = 8
+	}
+	return cols
+}
+
+func previewRows(termRows int) int {
+	rows := int(float64(termRows)*previewHeightFraction) - 2
+	if rows > previewMaxRows {
+		rows = previewMaxRows
+	}
+	if rows < previewMinRows {
+		rows = previewMinRows
+	}
+	if limit := termRows - 2; rows > limit {
+		rows = limit
+	}
+	if rows < 4 {
+		rows = 4
+	}
+	return rows
+}
+
 func scaleToFit(img image.Image, termCols, termRows int) image.Image {
-	const cellW, cellH = 8, 16
 	maxPxW := termCols * cellW
 	maxPxH := termRows * cellH
 	b := img.Bounds()
@@ -56,14 +101,6 @@ func encodeImage(img image.Image) (string, error) {
 	return halfBlockEncode(img)
 }
 
-func previewRows(termRows int) int {
-	rows := int(float64(termRows)*previewHeightFraction) - 2
-	if rows < 4 {
-		rows = 4
-	}
-	return rows
-}
-
 func halfBlockEncode(img image.Image) (string, error) {
 	b := img.Bounds()
 	width, height := b.Dx(), b.Dy()
@@ -91,7 +128,7 @@ func renderImage(data []byte, termCols, termRows int) tea.Cmd {
 		if err != nil {
 			return imageFetchedMsg{err: fmt.Errorf("decode image: %w", err)}
 		}
-		scaled := scaleToFit(img, termCols, previewRows(termRows))
+		scaled := scaleToFit(img, previewCols(termCols), previewRows(termRows))
 		s, err := encodeImage(scaled)
 		if err != nil {
 			return imageFetchedMsg{err: fmt.Errorf("render: %w", err)}

@@ -30,15 +30,14 @@ const (
 const maxTagsShown = 10
 const suffixReserve = 14
 const countRefreshInterval = 5 * time.Second
-const previewHeightFraction = 0.75
 const reservedLines = 4
 const aiTag = "ai_generated"
 
 type Model struct {
 	cfg        conf.Config
 	client     api.Client
-	sbClient   api.Client
-	r34Client  api.Client
+	clients    map[string]api.Client
+	sites      []string
 	limit      int
 	query      string
 	err        string
@@ -109,18 +108,15 @@ func (m Model) aiFilterOn() bool {
 	return m.cfg.FilterAI && m.cfg.ActiveAPI == "rule34"
 }
 
-func NewModel(sbClient, r34Client api.Client, cfg conf.Config, initialTags string, limit int) Model {
-	active := sbClient
-	if cfg.ActiveAPI == "rule34" && cfg.AgeVerified {
-		active = r34Client
-	}
+func NewModel(clients map[string]api.Client, cfg conf.Config, initialTags string, limit int) Model {
+	active := activeClient(clients, cfg)
 	m := Model{
-		cfg:       cfg,
-		client:    active,
-		sbClient:  sbClient,
-		r34Client: r34Client,
-		limit:     limit,
-		query:     initialTags,
+		cfg:     cfg,
+		client:  active,
+		clients: clients,
+		sites:   api.SiteNames(),
+		limit:   limit,
+		query:   initialTags,
 		downloader: func() *dl.Downloader {
 			home, err := os.UserHomeDir()
 			if err != nil {
@@ -145,6 +141,20 @@ func NewModel(sbClient, r34Client api.Client, cfg conf.Config, initialTags strin
 		m.state = stateSearch
 	}
 	return m
+}
+
+func activeClient(clients map[string]api.Client, cfg conf.Config) api.Client {
+	name := cfg.ActiveAPI
+	if !cfg.AgeVerified && api.IsAdultSite(name) {
+		name = "safebooru"
+	}
+	if client := clients[name]; client != nil {
+		return client
+	}
+	if client := clients["safebooru"]; client != nil {
+		return client
+	}
+	return api.NewSafebooruClient()
 }
 
 func (m Model) Init() tea.Cmd {
@@ -210,14 +220,44 @@ func (m *Model) clampViewport() tea.Cmd {
 	return cmd
 }
 
-func (m *Model) switchAPI(name string) {
-	m.cfg.ActiveAPI = name
-	if name == "rule34" {
-		m.client = m.r34Client
-	} else {
-		m.client = m.sbClient
+func (m *Model) allowedSites() []string {
+	var names []string
+	for _, name := range m.sites {
+		if api.IsAdultSite(name) && !m.cfg.AgeVerified {
+			continue
+		}
+		if m.clients[name] == nil {
+			continue
+		}
+		names = append(names, name)
 	}
+	return names
+}
+
+func (m *Model) switchAPI(name string) {
+	client := m.clients[name]
+	if client == nil {
+		return
+	}
+	m.cfg.ActiveAPI = name
+	m.client = client
 	_ = conf.Save(m.cfg)
+}
+
+func (m *Model) cycleAPI(delta int) {
+	names := m.allowedSites()
+	if len(names) < 2 {
+		return
+	}
+	index := 0
+	for i, name := range names {
+		if name == m.cfg.ActiveAPI {
+			index = i
+			break
+		}
+	}
+	index = ((index+delta)%len(names) + len(names)) % len(names)
+	m.switchAPI(names[index])
 }
 
 func (m *Model) startSearch() tea.Cmd {

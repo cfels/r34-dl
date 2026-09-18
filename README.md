@@ -4,7 +4,7 @@
 
 </div>
 
-a rule34/safebooru downloader with alot of feature's, Why? cuz i didn't saw any good r34 downloader since R34 dropped API update's, and i also wanted to add safe option (safebooru) to this type of downloader
+a rule34/safebooru downloader with alot of feature's, Why? cuz i didn't saw any good r34 downloader since R34 dropped API update's, and i also wanted to add safe option (safebooru) to this type of downloader, plus video sites (pornhub, xvideos, xhamster) in the same switcher
 
 > [!NOTE]  
 > R34 updated thier API and now u need API key, read [Obtaining API key](#obatining-api-key), what about Safebooru? well Safebooru doesn't need one so u can just jump in and use the tool (unless u want rule34 access then you'll need API key)
@@ -12,13 +12,25 @@ a rule34/safebooru downloader with alot of feature's, Why? cuz i didn't saw any 
 ### Features
 ( add later )
 
+### Sites
+
+| site | search | download |
+| ---- | ------ | -------- |
+| safebooru | yes | image/gif/vids |
+| rule34 | needs an API key | image/gif/vids |
+| pornhub | yes | video (mp4) |
+| xvideos | yes | video (mp4) |
+| xhamster | yes | video (mp4) |
+
+video playback and video downloads use `ffmpeg`, so make sure it's installed
+
 ### Donwloading
 you can download pre-built binary from [Release's](https://github.com/cfels/r34-dl/releases)
 
 ### Building
 ```
 go get
-CGO_ENABLED=0 go build -o r34-dl .
+go build
 ./r34-dl
 ```
 
@@ -33,12 +45,13 @@ Options:
   -b, --bulk                       download in bulk
   -l, --limit <N>                  max results to fetch (default 30)
   -t, --tags <tags>                search tags (comma-separated)
+  --api <site>                     site to use (safebooru, rule34, pornhub, xvideos, xhamster)
   -cls, --clear-history            clear search history
   -a, --audio                      play video audio (default: off)
   --no-audio                       mute video audio
   --filter-ai                      hide AI generated posts
   --no-filter-ai                   show AI generated posts
-  --interpolate                    smooth videos below 60fps (default: on for small previews)
+  --interpolate                    smooth videos below 60fps to 60fps (default: on)
   --no-interpolate                 play videos at their own frame rate
   --run-tests                      run tests
 ```

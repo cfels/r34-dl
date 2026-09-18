@@ -85,11 +85,21 @@ type Post struct {
 	Sample    FlexInt    `json:"sample"`
 	Score     FlexInt    `json:"score,omitempty"`
 	FileURL_  string     `json:"-"`
+
+	Site     string `json:"-"`
+	PageURL  string `json:"-"`
+	Thumb    string `json:"-"`
+	Title    string `json:"-"`
+	Duration string `json:"-"`
+	Video    bool   `json:"-"`
 }
 
 func (p Post) FileURL() string {
 	if p.FileURL_ != "" {
 		return p.FileURL_
+	}
+	if p.Thumb != "" {
+		return p.Thumb
 	}
 	return fmt.Sprintf("https://safebooru.org/images/%s/%s", p.Directory.String(), p.Image)
 }

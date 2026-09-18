@@ -217,19 +217,71 @@ func TestVideoFrameSwapsKittyImage(t *testing.T) {
 
 func TestVideoFitHasNoLetterbox(t *testing.T) {
 	w, h := videoFitSize(80, 24, 640, 360)
-	if w > 640 || h > 256 {
-		t.Errorf("fit %dx%d exceeds the 640x256 preview box", w, h)
+	if w > previewCols(80)*cellW || h > previewRows(24)*cellH {
+		t.Errorf("fit %dx%d exceeds the preview box", w, h)
 	}
 	if diff := w*360 - h*640; diff > 640 || diff < -640 {
 		t.Errorf("fit %dx%d distorts the 640x360 aspect", w, h)
 	}
-	if h != 256 {
+	if h != previewRows(24)*cellH {
 		t.Errorf("wide 640x360 source should fill the box height, got %d", h)
 	}
 
 	w, h = videoFitSize(80, 24, 0, 0)
-	if w != 640 || h != 256 {
-		t.Errorf("unknown source size should fall back to the 640x256 box, got %dx%d", w, h)
+	boxW, boxH := previewCols(80)*cellW, previewRows(24)*cellH
+	if w > boxW || h > boxH {
+		t.Errorf("16:9 fallback %dx%d exceeds the preview box %dx%d", w, h, boxW, boxH)
+	}
+	if h != boxH {
+		t.Errorf("16:9 fallback should fill the box height, got %d want %d", h, boxH)
+	}
+	if diff := w*9 - h*16; diff > 16 || diff < -16 {
+		t.Errorf("16:9 fallback %dx%d is not 16:9", w, h)
+	}
+	if w%2 != 0 || h%2 != 0 {
+		t.Errorf("fit %dx%d must stay even for the scale/pad chain", w, h)
+	}
+}
+
+func TestPreviewBoxStaysModest(t *testing.T) {
+	if cols := previewCols(100); cols < 55 || cols > 75 {
+		t.Errorf("previewCols(100) = %d, want a modest share of the width", cols)
+	}
+	if rows := previewRows(30); rows < 14 || rows > 19 {
+		t.Errorf("previewRows(30) = %d, want a modest share of the height", rows)
+	}
+	if cols := previewCols(300); cols != previewMaxCols {
+		t.Errorf("huge terminals should cap the preview width, got %d", cols)
+	}
+	if rows := previewRows(80); rows != previewMaxRows {
+		t.Errorf("huge terminals should cap the preview height, got %d", rows)
+	}
+	if cols := previewCols(20); cols < 8 {
+		t.Errorf("tiny terminals should still get a preview, got %d", cols)
+	}
+	if rows := previewRows(6); rows < 4 {
+		t.Errorf("tiny terminals should still get a preview, got %d", rows)
+	}
+
+	w, h := videoFitSize(300, 80, 1920, 1080)
+	if w > previewMaxCols*cellW || h > previewMaxRows*cellH {
+		t.Errorf("fit %dx%d is bigger than the capped preview box", w, h)
+	}
+	if diff := w*1080 - h*1920; diff > 1920 || diff < -1920 {
+		t.Errorf("fit %dx%d distorts the 1920x1080 aspect", w, h)
+	}
+}
+
+func TestParseSourceInfo(t *testing.T) {
+	info := parseSourceInfo("width=1920\nheight=1080\navg_frame_rate=30/1\nr_frame_rate=30000/1001\n")
+	if info.width != 1920 || info.height != 1080 {
+		t.Errorf("dims = %dx%d, want 1920x1080", info.width, info.height)
+	}
+	if info.fps < 29.9 || info.fps > 30.1 {
+		t.Errorf("fps = %v, want about 30", info.fps)
+	}
+	if empty := parseSourceInfo(""); empty.width != 0 || empty.fps != 0 {
+		t.Errorf("empty probe = %+v, want zeroes", empty)
 	}
 }
 
@@ -237,55 +289,64 @@ func TestVideoRateFilter(t *testing.T) {
 	on, off := true, false
 	cases := []struct {
 		rate   float64
-		pixels int
 		smooth *bool
 		want   string
 	}{
-		{rate: 120, pixels: 100000, want: "fps=60"},
-		{rate: 60, pixels: 100000, want: ""},
-		{rate: 59.94, pixels: 100000, want: ""},
-		{rate: 30, pixels: 100000, want: "minterpolate="},
-		{rate: 30, pixels: 500000, want: ""},
-		{rate: 30, pixels: 500000, smooth: &on, want: "minterpolate="},
-		{rate: 30, pixels: 100000, smooth: &off, want: ""},
-		{rate: 0, pixels: 100000, want: "fps=60"},
+		{rate: 120, want: "fps=60"},
+		{rate: 60, want: ""},
+		{rate: 59.94, want: ""},
+		{rate: 30, want: "minterpolate="},
+		{rate: 24, want: "minterpolate="},
+		{rate: 30, smooth: &on, want: "minterpolate="},
+		{rate: 30, smooth: &off, want: ""},
+		{rate: 0, want: "fps=60"},
 	}
 	for _, c := range cases {
-		got := videoRateFilter(c.rate, c.pixels, c.smooth)
+		got := videoRateFilter(c.rate, c.smooth)
 		if c.want == "" && got != "" {
-			t.Errorf("rate %v pixels %d -> %q, want none", c.rate, c.pixels, got)
+			t.Errorf("rate %v -> %q, want none", c.rate, got)
 			continue
 		}
 		if c.want != "" && !strings.HasPrefix(got, c.want) {
-			t.Errorf("rate %v pixels %d -> %q, want prefix %q", c.rate, c.pixels, got, c.want)
+			t.Errorf("rate %v -> %q, want prefix %q", c.rate, got, c.want)
 		}
 	}
 }
 
-func TestVideoInterpolationRaisesFramerate(t *testing.T) {
-	on := true
+func countVideoFrames(t *testing.T, opts videoOptions) int {
+	t.Helper()
 	clip := makeTestVideo(t, 30, 1)
-	vp, err := startVideoPlayer(videoPost(clip), 80, 24, videoOptions{smooth: &on})
+	vp, err := startVideoPlayer(videoPost(clip), 80, 24, opts)
 	if err != nil {
 		t.Fatalf("startVideoPlayer: %v", err)
 	}
 	defer vp.stop()
 
 	frames := 0
-	deadline := time.After(15 * time.Second)
+	deadline := time.After(20 * time.Second)
 	for {
 		select {
 		case _, ok := <-vp.frames:
 			if !ok {
-				if frames <= 45 {
-					t.Fatalf("interpolated 30fps clip produced %d frames, want about 60", frames)
-				}
-				return
+				return frames
 			}
 			frames++
 		case <-deadline:
 			t.Fatalf("timed out after %d frames", frames)
 		}
+	}
+}
+
+func TestVideoIsSmoothByDefault(t *testing.T) {
+	if frames := countVideoFrames(t, videoOptions{}); frames < 45 {
+		t.Errorf("a 30fps clip produced %d frames by default, want it smoothed to about 60", frames)
+	}
+}
+
+func TestVideoInterpolationCanBeDisabled(t *testing.T) {
+	off := false
+	if frames := countVideoFrames(t, videoOptions{smooth: &off}); frames > 40 {
+		t.Errorf("a 30fps clip produced %d frames with interpolation off, want about 30", frames)
 	}
 }
 
@@ -358,7 +419,7 @@ func TestVideoViewerRendersEveryFrame(t *testing.T) {
 	}
 	defer vp.stop()
 
-	m := NewModel(stubClient{}, stubClient{}, conf.Config{AgeVerified: true, ActiveAPI: "safebooru"}, "", 30)
+	m := NewModel(testClients(stubClient{}), conf.Config{AgeVerified: true, ActiveAPI: "safebooru"}, "", 30)
 	m.width, m.height = 80, 24
 	m.viewerPost = api.Post{ID: 1, Image: "1.mp4"}
 	m.state = stateVideoPlaying
@@ -415,7 +476,7 @@ func keyPress(r rune) tea.KeyMsg {
 }
 
 func newListModel() Model {
-	m := NewModel(stubClient{}, stubClient{}, conf.Config{AgeVerified: true, ActiveAPI: "safebooru"}, "", 30)
+	m := NewModel(testClients(stubClient{}), conf.Config{AgeVerified: true, ActiveAPI: "safebooru"}, "", 30)
 	m.width, m.height = 80, 24
 	m.state = stateList
 	m.posts = []api.Post{{ID: 1, Image: "1.mp4", FileURL_: "/does/not/exist.mp4"}}

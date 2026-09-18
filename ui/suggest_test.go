@@ -106,7 +106,7 @@ func keyByName(name string) tea.KeyMsg {
 
 func suggestModel(tags map[string][]string, history []string) Model {
 	client := fakeTagClient{tags: tags}
-	m := NewModel(client, client, conf.Config{
+	m := NewModel(testClients(client), conf.Config{
 		AgeVerified:   true,
 		ActiveAPI:     "safebooru",
 		SearchHistory: history,

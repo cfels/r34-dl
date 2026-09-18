@@ -52,7 +52,7 @@ func TestAPITagsAddsAIFilter(t *testing.T) {
 
 func TestSearchUsesAIFilter(t *testing.T) {
 	client := &recordingClient{}
-	m := NewModel(client, client, conf.Config{AgeVerified: true, ActiveAPI: "rule34"}, "touhou", 30)
+	m := NewModel(testClients(client), conf.Config{AgeVerified: true, ActiveAPI: "rule34"}, "touhou", 30)
 	m.width, m.height = 100, 30
 	m.state = stateList
 

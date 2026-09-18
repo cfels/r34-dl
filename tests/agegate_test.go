@@ -29,7 +29,10 @@ func newTestModel() ui.Model {
 		AgeVerified: false,
 		ActiveAPI:   "safebooru",
 	}
-	return ui.NewModel(sb, r34, cfg, "", 30)
+	return ui.NewModel(map[string]api.Client{
+		"safebooru": sb,
+		"rule34":    r34,
+	}, cfg, "", 30)
 }
 
 func sendKey(m ui.Model, key string) ui.Model {
@@ -143,7 +146,10 @@ func TestAgeGate_SkippedWhenAlreadyVerified(t *testing.T) {
 		AgeVerified: true,
 		ActiveAPI:   "safebooru",
 	}
-	m := ui.NewModel(sb, r34, cfg, "", 30)
+	m := ui.NewModel(map[string]api.Client{
+		"safebooru": sb,
+		"rule34":    r34,
+	}, cfg, "", 30)
 	preview(t, "already verified  →  initial view", m.View())
 	if contains(m.View(), "are you 18") {
 		t.Error("age gate should be skipped")

@@ -19,10 +19,13 @@ import (
 )
 
 func fetchBulkPosts(client api.Client, query string, want int) ([]api.Post, error) {
-	const pageSize = 1000
+	const (
+		pageSize = 1000
+		maxPages = 20
+	)
 	var all []api.Post
-	page := 0
-	for len(all) < want {
+	seen := make(map[int]bool)
+	for page := 0; page < maxPages && len(all) < want; page++ {
 		posts, err := client.SearchPosts(query, pageSize, page)
 		if err != nil {
 			return all, err
@@ -30,11 +33,20 @@ func fetchBulkPosts(client api.Client, query string, want int) ([]api.Post, erro
 		if len(posts) == 0 {
 			break
 		}
-		all = append(all, posts...)
-		if len(posts) < pageSize {
+		added := 0
+		for _, post := range posts {
+			if post.ID != 0 {
+				if seen[post.ID] {
+					continue
+				}
+				seen[post.ID] = true
+			}
+			all = append(all, post)
+			added++
+		}
+		if added == 0 {
 			break
 		}
-		page++
 	}
 	if len(all) > want {
 		all = all[:want]
@@ -58,6 +70,8 @@ func main() {
 	clearHistory := flag.Bool("clear-history", false, "clear search history")
 	flag.BoolVar(clearHistory, "cls", false, "clear search history (short)")
 
+	site := flag.String("api", "", "site to use ("+strings.Join(api.SiteNames(), ", ")+")")
+
 	audioOn := flag.Bool("audio", false, "play video audio (default off)")
 	flag.BoolVar(audioOn, "a", false, "play video audio (short)")
 	audioOff := flag.Bool("no-audio", false, "mute video audio")
@@ -65,7 +79,7 @@ func main() {
 	filterAI := flag.Bool("filter-ai", false, "hide AI generated posts")
 	noFilterAI := flag.Bool("no-filter-ai", false, "show AI generated posts")
 
-	interpolateOn := flag.Bool("interpolate", false, "always smooth videos below 60fps up to 60fps")
+	interpolateOn := flag.Bool("interpolate", false, "smooth videos below 60fps up to 60fps (default)")
 	interpolateOff := flag.Bool("no-interpolate", false, "play videos at their own frame rate")
 
 	runTests := flag.Bool("run-tests", false, "run tests")
@@ -81,12 +95,13 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  -b, --bulk                       download in bulk\n")
 		fmt.Fprintf(os.Stderr, "  -l, --limit <N>                  max results to fetch (default 30)\n")
 		fmt.Fprintf(os.Stderr, "  -t, --tags <tags>                search tags (comma-separated)\n")
+		fmt.Fprintf(os.Stderr, "  --api <site>                     site to use (safebooru, rule34, pornhub, xvideos, xhamster)\n")
 		fmt.Fprintf(os.Stderr, "  -cls, --clear-history            clear search history\n")
 		fmt.Fprintf(os.Stderr, "  -a, --audio                      play video audio (default: off)\n")
 		fmt.Fprintf(os.Stderr, "  --no-audio                       mute video audio\n")
 		fmt.Fprintf(os.Stderr, "  --filter-ai                      hide AI generated posts\n")
 		fmt.Fprintf(os.Stderr, "  --no-filter-ai                   show AI generated posts\n")
-		fmt.Fprintf(os.Stderr, "  --interpolate                    smooth videos below 60fps (default: on for small previews)\n")
+		fmt.Fprintf(os.Stderr, "  --interpolate                    smooth videos below 60fps to 60fps (default: on)\n")
 		fmt.Fprintf(os.Stderr, "  --no-interpolate                 play videos at their own frame rate\n")
 		fmt.Fprintf(os.Stderr, "  --run-tests                      run tests\n")
 	}
@@ -209,14 +224,31 @@ func main() {
 		log.Fatalf("failed to load config: %v", err)
 	}
 
-	sbClient := api.NewSafebooruClient()
-	r34Client := api.NewRule34Client(cfg.UserID, cfg.APIKey)
+	if *site != "" {
+		name := strings.ToLower(strings.TrimSpace(*site))
+		if !api.KnownSite(name) {
+			log.Fatalf("unknown site %q, choose from: %s", *site, strings.Join(api.SiteNames(), ", "))
+		}
+		if api.IsAdultSite(name) && !cfg.AgeVerified {
+			log.Fatalf("%s is age restricted, run r34-dl once and answer the age prompt first", name)
+		}
+		cfg.ActiveAPI = name
+		if err := conf.Save(cfg); err != nil {
+			log.Fatalf("failed to save config: %v", err)
+		}
+	}
 
-	var activeClient api.Client
-	if cfg.AgeVerified && cfg.ActiveAPI == "rule34" {
-		activeClient = r34Client
-	} else {
-		activeClient = sbClient
+	clients := map[string]api.Client{
+		"safebooru": api.NewSafebooruClient(),
+		"rule34":    api.NewRule34Client(cfg.UserID, cfg.APIKey),
+		"pornhub":   api.NewPornHubClient(),
+		"xvideos":   api.NewXVideosClient(),
+		"xhamster":  api.NewXHamsterClient(),
+	}
+
+	activeClient := clients[cfg.ActiveAPI]
+	if !cfg.AgeVerified || activeClient == nil {
+		activeClient = clients["safebooru"]
 	}
 
 	if *bulk {
@@ -266,7 +298,7 @@ func main() {
 		return
 	}
 
-	p := tea.NewProgram(ui.NewModel(sbClient, r34Client, cfg, *tags, *limit))
+	p := tea.NewProgram(ui.NewModel(clients, cfg, *tags, *limit))
 	if _, err := p.Run(); err != nil {
 		fmt.Println("err!", err)
 		os.Exit(1)

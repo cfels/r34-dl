@@ -47,8 +47,8 @@ func VideoFitSize(termCols, termRows, srcW, srcH int) (int, int) {
 	return videoFitSize(termCols, termRows, srcW, srcH)
 }
 
-func VideoRateFilter(rate float64, pixels int, smooth *bool) string {
-	return videoRateFilter(rate, pixels, smooth)
+func VideoRateFilter(rate float64, smooth *bool) string {
+	return videoRateFilter(rate, smooth)
 }
 
 func AudioFilterArgs() []string { return audioFilterArgs() }
@@ -76,6 +76,9 @@ func (vp *videoPlayer) Stopped() bool              { return vp.stopped() }
 func (m Model) State() State                 { return m.state }
 func (m *Model) SetState(s State)            { m.state = s }
 func (m *Model) SetSize(w, h int)            { m.width, m.height = w, h }
+func (m *Model) SwitchAPI(name string)       { m.switchAPI(name) }
+func (m Model) ActiveAPI() string            { return m.cfg.ActiveAPI }
+func (m Model) AllowedSites() []string       { return m.allowedSites() }
 func (m *Model) SetPosts(posts []api.Post)   { m.posts = posts }
 func (m *Model) SetViewerPost(post api.Post) { m.viewerPost = post }
 func (m *Model) SetVideo(vp *VideoPlayer)    { m.video = vp }
