@@ -22,11 +22,6 @@ CGO_ENABLED=0 go build -o r34-dl .
 ./r34-dl
 ```
 
-the banner pulls `ver:` and `commit:` from the latest [release](https://github.com/cfels/r34-dl/releases), falling back to the build's own version info when offline, stamp a build manually with:
-```
-CGO_ENABLED=0 go build -ldflags "-X moxiu/r34-dl/ui.buildVersion=v1.4 -X moxiu/r34-dl/ui.buildCommit=abc1234" -o r34-dl .
-```
-
 ### Usage:
 ```
 Usage: r34-dl [options]
