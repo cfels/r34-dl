@@ -1,4 +1,4 @@
-name: Build and publish dev builds
+name: Build & push latest build to TG
 
 on:
   push:
@@ -14,27 +14,24 @@ concurrency:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
     strategy:
       fail-fast: false
       matrix:
         include:
-          - goos: linux
-            goarch: amd64
-            ext: ""
-          - goos: linux
-            goarch: arm64
-            ext: ""
-          - goos: darwin
-            goarch: amd64
-            ext: ""
-          - goos: darwin
-            goarch: arm64
-            ext: ""
-          - goos: windows
-            goarch: amd64
-            ext: ".exe"
+          - goarch: amd64
+          - goarch: arm64
 
     steps:
+      - name: Prepare Arch Linux container
+        run: |
+          set -euo pipefail
+          pacman-key --init
+          pacman-key --populate archlinux
+          pacman -Sy --noconfirm --needed archlinux-keyring
+          pacman -Syu --noconfirm --needed git curl
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -44,18 +41,18 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
 
       - name: Build
         id: build
         env:
-          GOOS: ${{ matrix.goos }}
+          GOOS: linux
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: "0"
         run: |
           set -euo pipefail
           short="${GITHUB_SHA:0:7}"
-          name="r34-dl-${short}-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}"
+          name="r34-dl-${short}-archlinux-${{ matrix.goarch }}"
           mkdir -p dist
           go build -trimpath \
             -ldflags "-s -w -X moxiu/r34-dl/ui.buildVersion=dev -X moxiu/r34-dl/ui.buildCommit=${GITHUB_SHA}" \
@@ -74,7 +71,7 @@ jobs:
             echo "missing TELEGRAM_BOT_TOKEN repository secret" >&2
             exit 1
           fi
-          caption="${LABEL} build | commit: ${GITHUB_SHA}"
+          caption="${LABEL} build (archlinux/${{ matrix.goarch }}) | commit: ${GITHUB_SHA}"
           echo "publishing ${ARTIFACT}"
           echo "caption: ${caption}"
           curl --fail-with-body --silent --show-error --retry 5 --retry-delay 5 --retry-connrefused \
