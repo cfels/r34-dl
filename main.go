@@ -70,9 +70,13 @@ func main() {
 
 	runTests := flag.Bool("run-tests", false, "run tests")
 
+	showVersion := flag.Bool("version", false, "print version and commit")
+	flag.BoolVar(showVersion, "v", false, "print version and commit (short)")
+
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: r34-dl [options]\n\nOptions:\n")
 		fmt.Fprintf(os.Stderr, "  -h, --help                       show this help message\n")
+		fmt.Fprintf(os.Stderr, "  -v, --version                    print version and commit\n")
 		fmt.Fprintf(os.Stderr, "  -apik, --add-api-key             store rule34 api key (prompt's u to paste ur api key)\n")
 		fmt.Fprintf(os.Stderr, "  -b, --bulk                       download in bulk\n")
 		fmt.Fprintf(os.Stderr, "  -l, --limit <N>                  max results to fetch (default 30)\n")
@@ -88,6 +92,11 @@ func main() {
 	}
 
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(ui.VersionBanner())
+		return
+	}
 
 	if *audioOn || *audioOff {
 		cfg, err := conf.Load()

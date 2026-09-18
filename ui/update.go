@@ -16,6 +16,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.clampViewport()
 		return m, nil
 
+	case releaseInfoMsg:
+		if msg.err == nil {
+			m.release = msg.info
+		}
+		return m, nil
+
 	case tea.KeyMsg:
 		if msg.String() == "p" && m.previewKeyRepeated() {
 			return m, nil

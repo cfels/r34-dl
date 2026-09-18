@@ -85,6 +85,9 @@ type Model struct {
 	suggestDone  string
 	suggestPick  bool
 	suggestGen   int
+
+	version versionInfo
+	release versionInfo
 }
 
 func (m Model) Cfg() conf.Config { return m.cfg }
@@ -132,6 +135,7 @@ func NewModel(sbClient, r34Client api.Client, cfg conf.Config, initialTags strin
 		history:       cfg.SearchHistory,
 		historyIdx:    len(cfg.SearchHistory),
 		cursorVisible: true,
+		version:       localVersionInfo(),
 	}
 	if !cfg.AgeVerified {
 		m.state = stateAgeGate
@@ -156,6 +160,7 @@ func (m Model) Init() tea.Cmd {
 	case m.state == stateSearch:
 		cmds = append(cmds, startBlink())
 	}
+	cmds = append(cmds, fetchReleaseInfo())
 	return tea.Batch(cmds...)
 }
 
