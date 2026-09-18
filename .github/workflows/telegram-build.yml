@@ -1,0 +1,84 @@
+name: Build and publish dev builds
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: telegram-build-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            ext: ""
+          - goos: linux
+            goarch: arm64
+            ext: ""
+          - goos: darwin
+            goarch: amd64
+            ext: ""
+          - goos: darwin
+            goarch: arm64
+            ext: ""
+          - goos: windows
+            goarch: amd64
+            ext: ".exe"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        id: build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          set -euo pipefail
+          short="${GITHUB_SHA:0:7}"
+          name="r34-dl-${short}-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}"
+          mkdir -p dist
+          go build -trimpath \
+            -ldflags "-s -w -X moxiu/r34-dl/ui.buildVersion=dev -X moxiu/r34-dl/ui.buildCommit=${GITHUB_SHA}" \
+            -o "dist/${name}" .
+          echo "path=dist/${name}" >> "${GITHUB_OUTPUT}"
+
+      - name: Publish to Telegram
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID || '@r34_dl' }}
+          LABEL: ${{ github.ref_type == 'tag' && 'release' || 'dev' }}
+          ARTIFACT: ${{ steps.build.outputs.path }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TELEGRAM_BOT_TOKEN}" ]; then
+            echo "missing TELEGRAM_BOT_TOKEN repository secret" >&2
+            exit 1
+          fi
+          caption="${LABEL} build | commit: ${GITHUB_SHA}"
+          echo "publishing ${ARTIFACT}"
+          echo "caption: ${caption}"
+          curl --fail-with-body --silent --show-error --retry 5 --retry-delay 5 --retry-connrefused \
+            --request POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument" \
+            --form "chat_id=${TELEGRAM_CHAT_ID}" \
+            --form "caption=${caption}" \
+            --form "document=@${ARTIFACT}"
