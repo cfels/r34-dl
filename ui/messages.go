@@ -4,11 +4,13 @@ import (
 	"fmt"
 	"image"
 	"io"
+	"net"
 	"net/http"
 	"time"
 
 	"moxiu/r34-dl/api"
 	"moxiu/r34-dl/dl"
+	"moxiu/r34-dl/safe"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -65,8 +67,6 @@ type videoDoneMsg struct {
 	err error
 }
 
-type resultMsg dl.Result
-type doneMsg struct{}
 type blinkMsg struct{}
 
 func doSearch(client api.Client, query string, limit, page int) tea.Cmd {
@@ -104,7 +104,25 @@ func startBlink() tea.Cmd {
 
 func fetchImage(rawURL string) tea.Cmd {
 	return func() tea.Msg {
-		client := &http.Client{Timeout: 30 * time.Second}
+		if !safe.PublicMediaURL(rawURL) {
+			return imageFetchedMsg{err: fmt.Errorf("refusing to fetch unsupported or non-public image url")}
+		}
+		client := &http.Client{
+			Timeout: 30 * time.Second,
+			Transport: &http.Transport{
+				Proxy:       http.ProxyFromEnvironment,
+				DialContext: safe.PublicDialContext(&net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}),
+			},
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				if len(via) >= 10 {
+					return fmt.Errorf("stopped after 10 redirects")
+				}
+				if !safe.PublicMediaURL(req.URL.String()) {
+					return fmt.Errorf("refusing to follow redirect to %s", req.URL.Host)
+				}
+				return nil
+			},
+		}
 		req, err := http.NewRequest(http.MethodGet, rawURL, nil)
 		if err != nil {
 			return imageFetchedMsg{err: fmt.Errorf("build request: %w", err)}
@@ -115,9 +133,15 @@ func fetchImage(rawURL string) tea.Cmd {
 			return imageFetchedMsg{err: fmt.Errorf("fetch: %w", err)}
 		}
 		defer resp.Body.Close()
-		data, err := io.ReadAll(resp.Body)
+		if resp.StatusCode != http.StatusOK {
+			return imageFetchedMsg{err: fmt.Errorf("fetch: %s", resp.Status)}
+		}
+		data, err := io.ReadAll(io.LimitReader(resp.Body, maxImageBytes+1))
 		if err != nil {
 			return imageFetchedMsg{err: fmt.Errorf("read body: %w", err)}
+		}
+		if len(data) > maxImageBytes {
+			return imageFetchedMsg{err: fmt.Errorf("image is larger than %d MiB", maxImageBytes>>20)}
 		}
 		return imageFetchedMsg{data: data}
 	}
@@ -125,21 +149,18 @@ func fetchImage(rawURL string) tea.Cmd {
 
 func downloadOne(d *dl.Downloader, post api.Post) tea.Cmd {
 	return func() tea.Msg {
-		ch := d.DownloadAll([]api.Post{post})
-		r := <-ch
-		if r.Err != nil {
-			return singleDownloadMsg{err: r.Err}
+		var result dl.Result
+		got := false
+		for r := range d.DownloadAll([]api.Post{post}) {
+			result = r
+			got = true
 		}
-		return singleDownloadMsg{path: r.Path}
-	}
-}
-
-func waitForResult(ch <-chan dl.Result) tea.Cmd {
-	return func() tea.Msg {
-		r, ok := <-ch
-		if !ok {
-			return doneMsg{}
+		if !got {
+			return singleDownloadMsg{err: fmt.Errorf("download produced no result")}
 		}
-		return resultMsg(r)
+		if result.Err != nil {
+			return singleDownloadMsg{err: result.Err}
+		}
+		return singleDownloadMsg{path: result.Path}
 	}
 }

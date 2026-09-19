@@ -42,7 +42,6 @@ jobs:
           set -euo pipefail
           git config --global --add safe.directory "${GITHUB_WORKSPACE}"
           git config --global --add safe.directory '*'
-          git status --short
 
       - name: Set up Go
         uses: actions/setup-go@v7
@@ -84,14 +83,11 @@ jobs:
             exit 1
           fi
           caption="${LABEL} build (archlinux/${{ matrix.goarch }}) | commit: ${GITHUB_SHA}"
-          echo "publishing ${ARTIFACT}"
-          echo "caption: ${caption}"
-          pwd
-          ls -la "${GITHUB_WORKSPACE}" "${GITHUB_WORKSPACE}/dist" || true
           if [ ! -f "${ARTIFACT}" ]; then
             echo "artifact missing: ${ARTIFACT}" >&2
             exit 1
           fi
+          echo "publishing ${ARTIFACT}"
           curl --fail-with-body --silent --show-error --retry 5 --retry-delay 5 --retry-connrefused \
             --request POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument" \
             --form-string "chat_id=${TELEGRAM_CHAT_ID}" \

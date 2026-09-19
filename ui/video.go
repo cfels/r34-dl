@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"moxiu/r34-dl/api"
+	"moxiu/r34-dl/safe"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -23,6 +24,9 @@ import (
 const (
 	videoMaxFPS    = 120
 	videoUserAgent = "r34-dl/viewer"
+
+	mediaProtocolWhitelist = "http,https,tcp,tls,crypto"
+	mediaReadTimeout       = "60000000"
 )
 
 const (
@@ -114,12 +118,13 @@ func videoRateFilter(rate float64) string {
 	return ""
 }
 
-func streamHeaders(stream api.Stream) string {
+func streamHeaders(stream api.Stream, site string) string {
 	var headers strings.Builder
-	if stream.Cookie != "" {
+	allowedHost := api.MediaHostAllowed(site, stream.URL)
+	if stream.Cookie != "" && allowedHost {
 		fmt.Fprintf(&headers, "Cookie: %s\r\n", stream.Cookie)
 	}
-	if stream.Referer != "" {
+	if stream.Referer != "" && allowedHost {
 		fmt.Fprintf(&headers, "Referer: %s\r\n", stream.Referer)
 	}
 	return headers.String()
@@ -130,12 +135,18 @@ func startVideoPlayer(post api.Post, termCols, termRows int, opts videoOptions) 
 	if err != nil {
 		return nil, err
 	}
+	if !safe.PublicMediaURL(stream.URL) {
+		return nil, fmt.Errorf("refusing to play non-public media url for post %d (set %s=1 to allow)", post.ID, safe.AllowPrivateHostsEnv)
+	}
 	return startStreamPlayer(stream, post, termCols, termRows, opts)
 }
 
 func startStreamPlayer(stream api.Stream, post api.Post, termCols, termRows int, opts videoOptions) (*videoPlayer, error) {
 	rawURL := stream.URL
-	headers := streamHeaders(stream)
+	if !safe.MediaURL(rawURL) {
+		return nil, fmt.Errorf("refusing to play unsupported media url for post %d", post.ID)
+	}
+	headers := streamHeaders(stream, post.Site)
 	info := probeSource(rawURL, headers)
 	srcW, srcH := post.Width, post.Height
 	if info.width > 0 && info.height > 0 {
@@ -169,6 +180,8 @@ func startStreamPlayer(stream api.Stream, post api.Post, termCols, termRows int,
 		cmd.Args = append(cmd.Args, "-stream_loop", "-1")
 	}
 	cmd.Args = append(cmd.Args,
+		"-protocol_whitelist", mediaProtocolWhitelist,
+		"-rw_timeout", mediaReadTimeout,
 		"-i", rawURL,
 		"-an", "-sn",
 		"-vf", filter,
@@ -228,6 +241,8 @@ func probeSource(rawURL, headers string) sourceInfo {
 	defer cancel()
 	args := []string{
 		"-v", "error",
+		"-protocol_whitelist", mediaProtocolWhitelist,
+		"-rw_timeout", mediaReadTimeout,
 		"-select_streams", "v:0",
 		"-show_entries", "stream=width,height,avg_frame_rate,r_frame_rate",
 		"-of", "default=nw=1",
@@ -371,6 +386,8 @@ func spawnAudio(rawURL, headers string) *exec.Cmd {
 	}
 	args := []string{"-loglevel", "error", "-nodisp", "-autoexit", "-vn", "-sn"}
 	args = append(args, audioFilterArgs()...)
+	args = append(args, "-protocol_whitelist", mediaProtocolWhitelist)
+	args = append(args, "-rw_timeout", mediaReadTimeout)
 	if isHTTP(rawURL) {
 		args = append(args, "-user_agent", videoUserAgent)
 		if headers != "" {

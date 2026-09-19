@@ -20,8 +20,6 @@ const (
 	stateSearch
 	stateSearching
 	stateList
-	stateDownloading
-	stateDone
 	stateViewerLoading
 	stateViewer
 	stateVideoPlaying
@@ -57,10 +55,6 @@ type Model struct {
 
 	state      state
 	downloader *dl.Downloader
-	results    <-chan dl.Result
-	done       int
-	failed     int
-	total      int
 
 	viewerPost    api.Post
 	viewerErr     string

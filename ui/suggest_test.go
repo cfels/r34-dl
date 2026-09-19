@@ -12,12 +12,10 @@ import (
 
 type fakeTagClient struct {
 	stubClient
-	tags    map[string][]string
-	seenFor []string
+	tags map[string][]string
 }
 
 func (f fakeTagClient) Autocomplete(prefix string) ([]string, error) {
-	f.seenFor = append(f.seenFor, prefix)
 	return f.tags[prefix], nil
 }
 

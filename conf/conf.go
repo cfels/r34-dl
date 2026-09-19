@@ -22,9 +22,10 @@ func path() (string, error) {
 		return "", err
 	}
 	appDir := filepath.Join(dir, "r34-dl")
-	if err := os.MkdirAll(appDir, 0o755); err != nil {
+	if err := os.MkdirAll(appDir, 0o700); err != nil {
 		return "", err
 	}
+	_ = os.Chmod(appDir, 0o700)
 	return filepath.Join(appDir, "config.json"), nil
 }
 
@@ -59,7 +60,29 @@ func Save(cfg Config) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(p, data, 0o600)
+	file, err := os.CreateTemp(filepath.Dir(p), ".config-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmp := file.Name()
+	if _, err := file.Write(data); err != nil {
+		file.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := file.Close(); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	if err := os.Chmod(tmp, 0o600); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, p); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 func SaveAPIKey(userID, apiKey string) error {

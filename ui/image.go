@@ -19,6 +19,12 @@ import (
 
 const kittyChunkSize = 4096
 
+const (
+	maxImageBytes  = 24 << 20
+	maxImagePixels = 16_000_000
+	maxImageSide   = 10_000
+)
+
 func scaleToFit(img image.Image, termCols, termRows int) image.Image {
 	maxPxW := termCols * cellW
 	maxPxH := termRows * cellH
@@ -111,6 +117,16 @@ func halfBlockEncode(img image.Image) (string, error) {
 
 func renderImage(data []byte, termCols, termRows int) tea.Cmd {
 	return func() tea.Msg {
+		cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+		if err != nil {
+			return imageFetchedMsg{err: fmt.Errorf("decode image: %w", err)}
+		}
+		if cfg.Width <= 0 || cfg.Height <= 0 {
+			return imageFetchedMsg{err: fmt.Errorf("image reports invalid dimensions %dx%d", cfg.Width, cfg.Height)}
+		}
+		if cfg.Width > maxImageSide || cfg.Height > maxImageSide || int64(cfg.Width)*int64(cfg.Height) > maxImagePixels {
+			return imageFetchedMsg{err: fmt.Errorf("image too large to preview (%dx%d)", cfg.Width, cfg.Height)}
+		}
 		img, _, err := image.Decode(bytes.NewReader(data))
 		if err != nil {
 			return imageFetchedMsg{err: fmt.Errorf("decode image: %w", err)}

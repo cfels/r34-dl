@@ -3,14 +3,19 @@ package ui
 import (
 	"fmt"
 	"image"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"moxiu/r34-dl/api"
 	"moxiu/r34-dl/conf"
+	"moxiu/r34-dl/safe"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -27,7 +32,7 @@ func makeTestVideo(t *testing.T, fps, seconds int) string {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		t.Skip("ffmpeg not installed")
 	}
-	path := filepath.Join(t.TempDir(), "clip.mp4")
+	path := testMediaFile(t, "clip.mp4")
 	cmd := exec.Command(
 		"ffmpeg", "-y", "-loglevel", "error",
 		"-f", "lavfi", "-i",
@@ -45,7 +50,7 @@ func makeTestGIF(t *testing.T, seconds int) string {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		t.Skip("ffmpeg not installed")
 	}
-	path := filepath.Join(t.TempDir(), "loop.gif")
+	path := testMediaFile(t, "loop.gif")
 	cmd := exec.Command(
 		"ffmpeg", "-y", "-loglevel", "error",
 		"-f", "lavfi", "-i",
@@ -59,7 +64,46 @@ func makeTestGIF(t *testing.T, seconds int) string {
 }
 
 func videoPost(path string) api.Post {
-	return api.Post{Image: filepath.Base(path), FileURL_: path}
+	return api.Post{Image: filepath.Base(path), FileURL_: testMediaURL(path)}
+}
+
+var (
+	testMediaRoot = sync.OnceValue(func() string {
+		dir, err := os.MkdirTemp("", "r34-dl-media")
+		if err != nil {
+			return ""
+		}
+		return dir
+	})
+	testMediaServer = sync.OnceValue(func() *httptest.Server {
+		return httptest.NewServer(http.FileServer(http.Dir(testMediaRoot())))
+	})
+)
+
+func testMediaFile(t *testing.T, name string) string {
+	t.Helper()
+	dir := filepath.Join(testMediaRoot(), filepath.Base(t.TempDir()))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("media dir: %v", err)
+	}
+	return filepath.Join(dir, name)
+}
+
+func testMediaURL(path string) string {
+	rel, err := filepath.Rel(testMediaRoot(), path)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return path
+	}
+	return testMediaServer().URL + "/" + filepath.ToSlash(rel)
+}
+
+func TestMain(m *testing.M) {
+	os.Setenv(safe.AllowPrivateHostsEnv, "1")
+	code := m.Run()
+	if root := testMediaRoot(); root != "" {
+		os.RemoveAll(root)
+	}
+	os.Exit(code)
 }
 
 func playClip(t *testing.T, path string) (int, time.Duration) {
@@ -440,7 +484,7 @@ func TestGIFKeepsLooping(t *testing.T) {
 	if !isGIFURL("https://example.org/a/b.gif?x=1") {
 		t.Fatal("gif url with query string should be detected")
 	}
-	post := api.Post{Image: "loop.gif", FileURL_: makeTestGIF(t, 1)}
+	post := api.Post{Image: "loop.gif", FileURL_: testMediaURL(makeTestGIF(t, 1))}
 	vp, err := startVideoPlayer(post, 80, 24, videoOptions{})
 	if err != nil {
 		t.Fatalf("startVideoPlayer: %v", err)
@@ -589,7 +633,7 @@ func TestOnlyOneVideoPlayerAtATime(t *testing.T) {
 func TestHeldPreviewKeyKeepsOnePlayer(t *testing.T) {
 	clip := makeTestVideo(t, 30, 3)
 	m := newListModel()
-	m.posts = []api.Post{{ID: 1, Image: "1.mp4", FileURL_: clip}}
+	m.posts = []api.Post{{ID: 1, Image: "1.mp4", FileURL_: testMediaURL(clip)}}
 
 	msgs := make(chan tea.Msg, 64)
 	exec := func(cmd tea.Cmd) {

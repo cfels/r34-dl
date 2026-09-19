@@ -104,10 +104,26 @@ func runTestPackage(dir, pkg string, extra []string) (time.Duration, error) {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	cmd.Env = os.Environ()
+	cmd.Env = sanitizedTestEnv()
 	start := time.Now()
 	err := cmd.Run()
 	return time.Since(start), err
+}
+
+func sanitizedTestEnv() []string {
+	env := os.Environ()
+	out := env[:0]
+	for _, entry := range env {
+		if strings.HasPrefix(entry, "GOFLAGS=") ||
+			strings.HasPrefix(entry, "GOEXPERIMENT=") ||
+			strings.HasPrefix(entry, "GOENV=") ||
+			strings.HasPrefix(entry, "GOTOOLCHAIN=") {
+			continue
+		}
+		out = append(out, entry)
+	}
+	out = append(out, "GOENV=off", "GOTOOLCHAIN=local")
+	return out
 }
 
 func runTestSuites(extra []string) int {

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"moxiu/r34-dl/api"
+	"moxiu/r34-dl/safe"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -41,7 +42,7 @@ func doAutocomplete(client api.Client, word string, local []string, gen int) tea
 		merged := make([]string, 0, len(tags)+len(local))
 		seen := map[string]bool{}
 		for _, tag := range append(tags, local...) {
-			tag = strings.TrimSpace(tag)
+			tag = safe.Tag(tag)
 			if tag == "" || seen[tag] {
 				continue
 			}
@@ -85,7 +86,7 @@ func (m *Model) localSuggestions(word string) []string {
 	var tags []string
 	lower := strings.ToLower(word)
 	add := func(tag string) {
-		tag = strings.TrimSpace(tag)
+		tag = safe.Tag(tag)
 		if tag == "" || !strings.HasPrefix(strings.ToLower(tag), lower) || strings.EqualFold(tag, word) {
 			return
 		}

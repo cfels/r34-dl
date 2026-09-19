@@ -4,11 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"runtime/debug"
 	"strings"
 	"time"
+
+	"moxiu/r34-dl/safe"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -150,7 +153,16 @@ func githubField(client *http.Client, endpoint, field string) (string, error) {
 
 func fetchReleaseInfo() tea.Cmd {
 	return func() tea.Msg {
-		client := &http.Client{Timeout: releaseTimeout}
+		if safe.SkipUpdateCheck() {
+			return releaseInfoMsg{err: fmt.Errorf("update check disabled")}
+		}
+		client := &http.Client{
+			Timeout: releaseTimeout,
+			Transport: &http.Transport{
+				Proxy:       http.ProxyFromEnvironment,
+				DialContext: safe.PublicDialContext(&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}),
+			},
+		}
 		tag, err := githubField(client, latestReleaseAPI, "tag_name")
 		if err != nil {
 			return releaseInfoMsg{err: err}

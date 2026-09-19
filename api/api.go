@@ -7,11 +7,37 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"moxiu/r34-dl/safe"
 )
+
+const maxAPIBody = 8 << 20
+
+var secretQueryRe = regexp.MustCompile(`(?i)\b(api_key|user_id|token|password|secret|key)=[^&\s"']+`)
+
+type redactedError struct {
+	err  error
+	text string
+}
+
+func (e redactedError) Error() string { return e.text }
+func (e redactedError) Unwrap() error { return e.err }
+
+func redactSecrets(s string) string {
+	if !strings.Contains(s, "=") {
+		return s
+	}
+	return secretQueryRe.ReplaceAllString(s, "$1=***")
+}
+
+func requestError(prefix string, err error) error {
+	return redactedError{err: err, text: fmt.Sprintf("%s: %s", prefix, redactSecrets(err.Error()))}
+}
 
 type Client interface {
 	SearchPosts(tags string, limit, page int) ([]Post, error)
@@ -114,6 +140,39 @@ func newHTTPClient() *http.Client {
 	return &http.Client{Timeout: 15 * time.Second}
 }
 
+func readLimited(body io.Reader) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(body, maxAPIBody+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxAPIBody {
+		return nil, fmt.Errorf("response exceeded %d MiB", maxAPIBody>>20)
+	}
+	return data, nil
+}
+
+func sanitizePost(p Post) Post {
+	p.Tags = safe.List(p.Tags)
+	p.Image = safe.URLText(p.Image)
+	p.Directory = FlexString(safe.Tag(p.Directory.String()))
+	p.Owner = safe.Tag(p.Owner)
+	p.FileURL_ = safe.URLText(p.FileURL_)
+	p.PageURL = safe.URLText(p.PageURL)
+	p.Thumb = safe.URLText(p.Thumb)
+	p.Title = safe.Text(p.Title)
+	p.Duration = safe.Limit(p.Duration, 16)
+	if p.FileURL_ != "" && !safe.MediaURL(p.FileURL_) {
+		p.FileURL_ = ""
+	}
+	if p.Thumb != "" && !safe.MediaURL(p.Thumb) {
+		p.Thumb = ""
+	}
+	if p.PageURL != "" && !safe.MediaURL(p.PageURL) {
+		p.PageURL = ""
+	}
+	return p
+}
+
 type autoEntry struct {
 	Value string `json:"value"`
 	Label string `json:"label"`
@@ -135,7 +194,7 @@ func fetchAutocomplete(client *http.Client, endpoint, prefix, userAgent string) 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("bad status %d", resp.StatusCode)
 	}
-	body, err := io.ReadAll(resp.Body)
+	body, err := readLimited(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("couldn't read response: %w", err)
 	}
@@ -151,7 +210,7 @@ func parseAutocomplete(body []byte) ([]string, error) {
 	if err := json.Unmarshal(body, &entries); err == nil {
 		tags := make([]string, 0, len(entries))
 		for _, e := range entries {
-			tag := strings.TrimSpace(e.Value)
+			tag := safe.Tag(e.Value)
 			if tag == "" {
 				tag = stripTagCount(e.Label)
 			}
@@ -163,13 +222,19 @@ func parseAutocomplete(body []byte) ([]string, error) {
 	}
 	var plain []string
 	if err := json.Unmarshal(body, &plain); err == nil {
-		return plain, nil
+		tags := make([]string, 0, len(plain))
+		for _, tag := range plain {
+			if tag = safe.Tag(tag); tag != "" {
+				tags = append(tags, tag)
+			}
+		}
+		return tags, nil
 	}
 	return nil, fmt.Errorf("couldn't parse response")
 }
 
 func stripTagCount(label string) string {
-	label = strings.TrimSpace(label)
+	label = safe.Tag(label)
 	open := strings.LastIndex(label, " (")
 	if open < 0 || !strings.HasSuffix(label, ")") {
 		return label
@@ -186,14 +251,14 @@ func stripTagCount(label string) string {
 const maxPredictions = 8
 
 func matchPredictions(candidates []string, prefix string, max int) []string {
-	prefix = strings.ToLower(strings.TrimSpace(prefix))
+	prefix = strings.ToLower(safe.Tag(prefix))
 	if prefix == "" || max <= 0 {
 		return nil
 	}
 	seen := make(map[string]bool, len(candidates))
 	out := make([]string, 0, max)
 	for _, candidate := range candidates {
-		candidate = strings.Join(strings.Fields(strings.TrimSpace(candidate)), " ")
+		candidate = strings.Join(strings.Fields(safe.Tag(candidate)), " ")
 		key := strings.ToLower(candidate)
 		if candidate == "" || seen[key] {
 			continue
@@ -230,7 +295,9 @@ func suggestionFields(body []byte) []string {
 	for _, key := range ordered {
 		var value string
 		if err := json.Unmarshal(payload[key], &value); err == nil {
-			out = append(out, value)
+			if value = safe.Tag(value); value != "" {
+				out = append(out, value)
+			}
 		}
 	}
 	rest := make([]string, 0, len(payload))
@@ -242,7 +309,11 @@ func suggestionFields(body []byte) []string {
 	}
 	sort.Strings(rest)
 	for _, key := range rest {
-		out = append(out, rawStrings(payload[key])...)
+		for _, value := range rawStrings(payload[key]) {
+			if value = safe.Tag(value); value != "" {
+				out = append(out, value)
+			}
+		}
 	}
 	return out
 }
@@ -309,7 +380,7 @@ func (c *SafebooruClient) CountPosts(tags string) (int, error) {
 	if resp.StatusCode != http.StatusOK {
 		return 0, fmt.Errorf("bad status %d", resp.StatusCode)
 	}
-	body, err := io.ReadAll(resp.Body)
+	body, err := readLimited(resp.Body)
 	if err != nil {
 		return 0, fmt.Errorf("couldn't read response: %w", err)
 	}
@@ -348,7 +419,7 @@ func (c *SafebooruClient) SearchPosts(tags string, limit, page int) ([]Post, err
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("bad status %d", resp.StatusCode)
 	}
-	body, err := io.ReadAll(resp.Body)
+	body, err := readLimited(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("couldn't read response: %w", err)
 	}
@@ -358,6 +429,9 @@ func (c *SafebooruClient) SearchPosts(tags string, limit, page int) ([]Post, err
 	var posts []Post
 	if err := json.Unmarshal(body, &posts); err != nil {
 		return nil, fmt.Errorf("couldn't parse response: %w", err)
+	}
+	for i := range posts {
+		posts[i] = sanitizePost(posts[i])
 	}
 	return posts, nil
 }
@@ -406,20 +480,20 @@ func (c *Rule34Client) Ping() error {
 	q.Set("api_key", c.apiKey)
 	req, err := http.NewRequest(http.MethodGet, base+"?"+q.Encode(), nil)
 	if err != nil {
-		return fmt.Errorf("couldn't build request: %w", err)
+		return requestError("couldn't build request", err)
 	}
 	req.Header.Set("User-Agent", "r34-dl/rule34-client")
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("request failed: %w", err)
+		return requestError("request failed", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("bad status %d", resp.StatusCode)
 	}
-	body, err := io.ReadAll(resp.Body)
+	body, err := readLimited(resp.Body)
 	if err != nil {
-		return fmt.Errorf("couldn't read response: %w", err)
+		return requestError("couldn't read response", err)
 	}
 	if len(body) > 0 && body[0] == '"' {
 		var msg string
@@ -448,20 +522,20 @@ func (c *Rule34Client) CountPosts(tags string) (int, error) {
 	}
 	req, err := http.NewRequest(http.MethodGet, base+"?"+q.Encode(), nil)
 	if err != nil {
-		return 0, fmt.Errorf("couldn't build request: %w", err)
+		return 0, requestError("couldn't build request", err)
 	}
 	req.Header.Set("User-Agent", "r34-dl/rule34-client")
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return 0, fmt.Errorf("request failed: %w", err)
+		return 0, requestError("request failed", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		return 0, fmt.Errorf("bad status %d", resp.StatusCode)
 	}
-	body, err := io.ReadAll(resp.Body)
+	body, err := readLimited(resp.Body)
 	if err != nil {
-		return 0, fmt.Errorf("couldn't read response: %w", err)
+		return 0, requestError("couldn't read response", err)
 	}
 	if len(body) > 0 && body[0] == '"' {
 		var msg string
@@ -499,20 +573,20 @@ func (c *Rule34Client) SearchPosts(tags string, limit, page int) ([]Post, error)
 	}
 	req, err := http.NewRequest(http.MethodGet, base+"?"+q.Encode(), nil)
 	if err != nil {
-		return nil, fmt.Errorf("couldn't build request: %w", err)
+		return nil, requestError("couldn't build request", err)
 	}
 	req.Header.Set("User-Agent", "r34-dl/rule34-client")
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
+		return nil, requestError("request failed", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("bad status %d", resp.StatusCode)
 	}
-	body, err := io.ReadAll(resp.Body)
+	body, err := readLimited(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("couldn't read response: %w", err)
+		return nil, requestError("couldn't read response", err)
 	}
 	if len(body) == 0 || string(body) == "null" || string(body) == "[]" {
 		return []Post{}, nil
@@ -531,7 +605,7 @@ func (c *Rule34Client) SearchPosts(tags string, limit, page int) ([]Post, error)
 	}
 	posts := make([]Post, 0, len(raw))
 	for _, r := range raw {
-		p := Post{
+		p := sanitizePost(Post{
 			ID:        r.ID,
 			Tags:      r.Tags,
 			Image:     r.Image,
@@ -542,12 +616,8 @@ func (c *Rule34Client) SearchPosts(tags string, limit, page int) ([]Post, error)
 			Sample:    r.Sample,
 			Score:     r.Score,
 			FileURL_:  r.FileURL,
-		}
+		})
 		posts = append(posts, p)
 	}
 	return posts, nil
-}
-
-func NewClient() Client {
-	return NewSafebooruClient()
 }

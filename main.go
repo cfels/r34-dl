@@ -13,10 +13,27 @@ import (
 	"moxiu/r34-dl/api"
 	"moxiu/r34-dl/conf"
 	"moxiu/r34-dl/dl"
+	"moxiu/r34-dl/safe"
 	"moxiu/r34-dl/ui"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"golang.org/x/term"
 )
+
+func readSecretLine(r *os.File) string {
+	if term.IsTerminal(int(r.Fd())) {
+		if data, err := term.ReadPassword(int(r.Fd())); err == nil {
+			return strings.TrimSpace(string(data))
+		}
+	}
+	reader := bufio.NewReader(r)
+	line, _ := reader.ReadString('\n')
+	return strings.TrimSpace(line)
+}
+
+func failureLine(id int, err error) string {
+	return fmt.Sprintf("failed #%d: %s", id, safe.Text(err.Error()))
+}
 
 func fetchBulkPosts(client api.Client, query string, want int) ([]api.Post, error) {
 	const (
@@ -160,11 +177,9 @@ func main() {
 	}
 
 	if *addKey {
-		reader := bufio.NewReader(os.Stdin)
-
 		fmt.Print("paste ur full rule34 API key (e.g. &api_key=xxx&user_id=777): ")
-		line, _ := reader.ReadString('\n')
-		raw := strings.TrimSpace(line)
+		raw := readSecretLine(os.Stdin)
+		fmt.Println()
 		if raw == "" {
 			log.Fatal("no creds provided")
 		}
@@ -172,7 +187,7 @@ func main() {
 		raw = strings.TrimLeft(raw, "&?")
 		vals, err := url.ParseQuery(raw)
 		if err != nil {
-			log.Fatalf("failed to parse credentials: %v", err)
+			log.Fatal("couldn't parse the pasted block, expected something like &api_key=xxx&user_id=777")
 		}
 
 		apiKey := vals.Get("api_key")
@@ -184,12 +199,12 @@ func main() {
 		if err := conf.SaveAPIKey(userID, apiKey); err != nil {
 			log.Fatalf("failed to save credentials: %v", err)
 		}
-		fmt.Printf("saved! user_id=%s api_key=%s***\n", userID, apiKey[:min(8, len(apiKey))])
+		fmt.Printf("saved! user_id=%s api_key=stored (%d chars)\n", safe.Tag(userID), len(apiKey))
 
 		fmt.Print("checking API connection... ")
 		client := api.NewRule34Client(userID, apiKey)
 		if err := client.Ping(); err != nil {
-			fmt.Printf("unreachable (%v)\n", err)
+			fmt.Printf("unreachable (%s)\n", safe.Text(err.Error()))
 		} else {
 			fmt.Println("OK!")
 		}
@@ -253,7 +268,7 @@ func main() {
 
 		posts, err := fetchBulkPosts(activeClient, query, count)
 		if err != nil {
-			log.Fatalf("search failed: %v", err)
+			log.Fatalf("search failed: %s", safe.Text(err.Error()))
 		}
 		if len(posts) == 0 {
 			fmt.Println("no results")
@@ -265,11 +280,11 @@ func main() {
 		for r := range d.DownloadAll(posts) {
 			if r.Err != nil {
 				failed++
-				fmt.Printf("failed #%d: %v\n", r.Post.ID, r.Err)
+				fmt.Println(failureLine(r.Post.ID, r.Err))
 				continue
 			}
 			done++
-			fmt.Printf("saved #%d -> %s\n", r.Post.ID, r.Path)
+			fmt.Printf("saved #%d -> %s\n", r.Post.ID, safe.Text(r.Path))
 		}
 		fmt.Printf("done: %d saved, %d failed\n", done, failed)
 		return

@@ -3,25 +3,43 @@ package dl
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"moxiu/r34-dl/api"
+	"moxiu/r34-dl/safe"
 )
 
 const downloadUserAgent = "r34-dl/viewer"
 
 const ffmpegDownloadTimeout = 2 * time.Hour
+
+const mediaProtocolWhitelist = "http,https,tcp,tls,crypto"
+
+const (
+	defaultMaxDownloadMB = 8192
+	maxDownloadMBEnv     = "R34_DL_MAX_DOWNLOAD_MB"
+	mediaReadTimeout     = "60000000"
+	maxDownloadMBLimit   = 1 << 20
+)
+
+var downloadStallTimeout = 60 * time.Second
+
+var randRead = rand.Read
 
 type Result struct {
 	Post api.Post
@@ -47,20 +65,94 @@ func New(outDir string, workers int) *Downloader {
 }
 
 func newHTTPClient() *http.Client {
+	dialer := &net.Dialer{
+		Timeout:   15 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}
 	return &http.Client{
 		Transport: &http.Transport{
-			Proxy: http.ProxyFromEnvironment,
-			DialContext: (&net.Dialer{
-				Timeout:   15 * time.Second,
-				KeepAlive: 30 * time.Second,
-			}).DialContext,
+			Proxy:                 http.ProxyFromEnvironment,
+			DialContext:           safe.PublicDialContext(dialer),
 			MaxIdleConns:          32,
 			IdleConnTimeout:       90 * time.Second,
 			TLSHandshakeTimeout:   15 * time.Second,
 			ResponseHeaderTimeout: 30 * time.Second,
 			ExpectContinueTimeout: time.Second,
 		},
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return errors.New("stopped after 10 redirects")
+			}
+			if !safe.PublicMediaURL(req.URL.String()) {
+				return fmt.Errorf("refusing to follow redirect to %s", req.URL.Host)
+			}
+			return nil
+		},
 	}
+}
+
+func maxDownloadBytes() int64 {
+	raw := strings.TrimSpace(os.Getenv(maxDownloadMBEnv))
+	if raw == "" {
+		return int64(defaultMaxDownloadMB) << 20
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 0 {
+		return int64(defaultMaxDownloadMB) << 20
+	}
+	if n == 0 {
+		return 0
+	}
+	if n > maxDownloadMBLimit {
+		n = maxDownloadMBLimit
+	}
+	return int64(n) << 20
+}
+
+func copyWithStallTimeout(dst io.Writer, src io.ReadCloser, limit int64) (int64, error) {
+	var stalled atomic.Bool
+	timer := time.AfterFunc(downloadStallTimeout, func() {
+		stalled.Store(true)
+		_ = src.Close()
+	})
+	defer timer.Stop()
+	buf := make([]byte, 64<<10)
+	var total int64
+	for {
+		n, readErr := src.Read(buf)
+		if n > 0 {
+			timer.Reset(downloadStallTimeout)
+			if limit > 0 && total+int64(n) > limit {
+				return total, fmt.Errorf("download exceeded the %d MiB limit", limit>>20)
+			}
+			if _, writeErr := dst.Write(buf[:n]); writeErr != nil {
+				return total, writeErr
+			}
+			total += int64(n)
+		}
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				return total, nil
+			}
+			if stalled.Load() {
+				return total, fmt.Errorf("download stalled for %s without progress", downloadStallTimeout)
+			}
+			return total, readErr
+		}
+	}
+}
+
+func partName(outPath string, keepExt bool) string {
+	var seed [6]byte
+	if _, err := randRead(seed[:]); err != nil {
+		binary.BigEndian.PutUint32(seed[:4], uint32(time.Now().UnixNano()))
+	}
+	suffix := fmt.Sprintf(".part-%d-%s", os.Getpid(), hex.EncodeToString(seed[:]))
+	if !keepExt {
+		return outPath + suffix
+	}
+	ext := filepath.Ext(outPath)
+	return strings.TrimSuffix(outPath, ext) + suffix + ext
 }
 
 func (d *Downloader) DownloadAll(posts []api.Post) <-chan Result {
@@ -107,22 +199,14 @@ func (d *Downloader) downloadOne(post api.Post) Result {
 	if err != nil {
 		return Result{Post: post, Err: err}
 	}
-	if !validMediaURL(stream.URL) {
-		return Result{Post: post, Err: fmt.Errorf("unusable media url for post %d", post.ID)}
+	if !safe.PublicMediaURL(stream.URL) {
+		return Result{Post: post, Err: fmt.Errorf("refusing non-public media url for post %d (set %s=1 to allow)", post.ID, safe.AllowPrivateHostsEnv)}
 	}
 	outPath := filepath.Join(d.outDir, outputName(post))
 	if stream.IsHLS() {
 		return d.downloadHLS(post, stream, outPath)
 	}
 	return d.downloadFile(post, stream, outPath)
-}
-
-func validMediaURL(raw string) bool {
-	parsed, err := url.Parse(raw)
-	if err != nil {
-		return false
-	}
-	return parsed.Scheme == "http" || parsed.Scheme == "https"
 }
 
 func outputName(post api.Post) string {
@@ -159,10 +243,11 @@ func (d *Downloader) downloadFile(post api.Post, stream api.Stream, outPath stri
 		return Result{Post: post, Err: err}
 	}
 	req.Header.Set("User-Agent", downloadUserAgent)
-	if stream.Referer != "" {
+	allowedHost := api.MediaHostAllowed(post.Site, stream.URL)
+	if stream.Referer != "" && allowedHost {
 		req.Header.Set("Referer", stream.Referer)
 	}
-	if stream.Cookie != "" {
+	if stream.Cookie != "" && allowedHost {
 		req.Header.Set("Cookie", stream.Cookie)
 	}
 
@@ -176,12 +261,12 @@ func (d *Downloader) downloadFile(post api.Post, stream api.Stream, outPath stri
 		return Result{Post: post, Err: fmt.Errorf("status %d for post %d", resp.StatusCode, post.ID)}
 	}
 
-	tmp := outPath + ".part"
+	tmp := partName(outPath, false)
 	f, err := os.Create(tmp)
 	if err != nil {
 		return Result{Post: post, Err: err}
 	}
-	if _, err := io.Copy(f, resp.Body); err != nil {
+	if _, err := copyWithStallTimeout(f, resp.Body, maxDownloadBytes()); err != nil {
 		f.Close()
 		os.Remove(tmp)
 		return Result{Post: post, Err: err}
@@ -203,23 +288,11 @@ func (d *Downloader) downloadHLS(post api.Post, stream api.Stream, outPath strin
 		return Result{Post: post, Err: errors.New("ffmpeg is required to save this site's videos")}
 	}
 
-	tmp := strings.TrimSuffix(outPath, ".mp4") + ".part.mp4"
+	tmp := partName(outPath, true)
 	ctx, cancel := context.WithTimeout(context.Background(), ffmpegDownloadTimeout)
 	defer cancel()
 
-	args := []string{"-loglevel", "error", "-nostdin", "-y", "-user_agent", downloadUserAgent}
-	var headers strings.Builder
-	if stream.Cookie != "" {
-		fmt.Fprintf(&headers, "Cookie: %s\r\n", stream.Cookie)
-	}
-	if stream.Referer != "" {
-		fmt.Fprintf(&headers, "Referer: %s\r\n", stream.Referer)
-	}
-	if headers.Len() > 0 {
-		args = append(args, "-headers", headers.String())
-	}
-	args = append(args, "-i", stream.URL, "-c", "copy", "-movflags", "+faststart", tmp)
-
+	args := hlsArgs(stream, post, tmp)
 	cmd := exec.CommandContext(ctx, binary, args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -236,6 +309,28 @@ func (d *Downloader) downloadHLS(post api.Post, stream api.Stream, outPath strin
 		return Result{Post: post, Err: err}
 	}
 	return Result{Post: post, Path: outPath}
+}
+
+func hlsArgs(stream api.Stream, post api.Post, out string) []string {
+	args := []string{"-loglevel", "error", "-nostdin", "-y", "-user_agent", downloadUserAgent}
+	allowedHost := api.MediaHostAllowed(post.Site, stream.URL)
+	var headers strings.Builder
+	if stream.Cookie != "" && allowedHost {
+		fmt.Fprintf(&headers, "Cookie: %s\r\n", stream.Cookie)
+	}
+	if stream.Referer != "" && allowedHost {
+		fmt.Fprintf(&headers, "Referer: %s\r\n", stream.Referer)
+	}
+	if headers.Len() > 0 {
+		args = append(args, "-headers", headers.String())
+	}
+	args = append(args,
+		"-protocol_whitelist", mediaProtocolWhitelist,
+		"-rw_timeout", mediaReadTimeout,
+		"-i", stream.URL,
+		"-c", "copy", "-movflags", "+faststart", out,
+	)
+	return args
 }
 
 func lastLine(s string) string {

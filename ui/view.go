@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"moxiu/r34-dl/api"
+	"moxiu/r34-dl/safe"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -55,7 +56,7 @@ func renderPostLine(p api.Post, width int, selected bool) string {
 	if p.Title != "" {
 		return prefixRendered + idStyle.Render(idPart) + "  " + renderTitle(p.Title, width, selected) + durationSuffix(p.Duration)
 	}
-	tags := strings.Fields(p.Tags)
+	tags := strings.Fields(safe.List(p.Tags))
 	budget := width - len(prefix) - len(idPart) - 3 - suffixReserve
 	if budget < 10 {
 		budget = 10
@@ -95,6 +96,7 @@ func renderPostLine(p api.Post, width int, selected bool) string {
 }
 
 func renderTitle(title string, width int, selected bool) string {
+	title = safe.Text(title)
 	budget := width - len("  ") - 12 - suffixReserve
 	if budget < 10 {
 		budget = 10
@@ -112,6 +114,7 @@ func renderTitle(title string, width int, selected bool) string {
 }
 
 func durationSuffix(duration string) string {
+	duration = safe.Limit(duration, 16)
 	if duration == "" {
 		return ""
 	}
@@ -186,7 +189,7 @@ func (m Model) View() string {
 
 	case stateSearch:
 		s := m.bannerText() + "\n\n"
-		runes := []rune(m.query)
+		runes := []rune(safe.Mask(m.query))
 		before := inputStyle.Render(string(runes[:m.inputCursor]))
 		var cursorChar string
 		if m.inputCursor < len(runes) {
@@ -207,11 +210,11 @@ func (m Model) View() string {
 		ghost := m.ghostSuggestion()
 		ghostRendered := ""
 		if ghost != "" {
-			ghostRendered = dimStyle.Render(ghost)
+			ghostRendered = dimStyle.Render(safe.Tag(ghost))
 		}
 		s += m.apiLabel() + " " + titleStyle.Render("tags: ") + before + cursorRendered + ghostRendered + after + "\n"
 		if tags := m.nextSuggestions(); len(tags) > 0 {
-			current := tags[0]
+			current := safe.Tag(tags[0])
 			if len(tags) > maxShownTags {
 				tags = tags[:maxShownTags]
 			}
@@ -220,7 +223,11 @@ func (m Model) View() string {
 				line = selectedStyle.Render("▸ " + current)
 			}
 			if len(tags) > 1 {
-				line += dimStyle.Render(" · " + strings.Join(tags[1:], " · "))
+				rest := make([]string, 0, len(tags)-1)
+				for _, tag := range tags[1:] {
+					rest = append(rest, safe.Tag(tag))
+				}
+				line += dimStyle.Render(" · " + strings.Join(rest, " · "))
 			}
 			s += dimStyle.Render("   tab/Y → ") + line + "\n"
 		}
@@ -233,7 +240,7 @@ func (m Model) View() string {
 			s += dimStyle.Render(" make sure to get one from thier website, then use: ./r34-dl -apik") + "\n\n"
 		}
 		if m.err != "" {
-			s += errorStyle.Render(m.err) + "\n\n"
+			s += errorStyle.Render(safe.Text(m.err)) + "\n\n"
 		}
 		hint := "tab: switch site · shift+tab: back · enter: search · ↑/↓: history"
 		if len(m.suggestions) > 0 {
@@ -303,7 +310,7 @@ func (m Model) View() string {
 
 	case stateViewer:
 		if m.viewerErr != "" {
-			return errorStyle.Render(m.viewerErr) + "\n\n" + dimStyle.Render("any key: back")
+			return errorStyle.Render(safe.Text(m.viewerErr)) + "\n\n" + dimStyle.Render("any key: back")
 		}
 		status := "\n" + dimStyle.Render(fmt.Sprintf(
 			"#%d  %s  any key / space: back",
@@ -314,20 +321,13 @@ func (m Model) View() string {
 		}
 		return status
 
-	case stateDownloading:
-		return fmt.Sprintf("downloading...\n\n%d/%d done, %d failed\n\n%s",
-			m.done+m.failed, m.total, m.failed, dimStyle.Render("ctrl+c: quit"))
-
-	case stateDone:
-		return fmt.Sprintf("finished!\n\n%d downloaded, %d failed\nSaved to ./downloads\n\n%s",
-			m.done, m.failed, dimStyle.Render("/: new search · q: quit"))
 	}
 	return ""
 }
 
 func postSize(p api.Post) string {
 	if p.Duration != "" {
-		return p.Duration
+		return safe.Limit(p.Duration, 16)
 	}
 	if p.Video {
 		return "video"

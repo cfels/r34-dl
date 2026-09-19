@@ -17,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"moxiu/r34-dl/safe"
 )
 
 const browserUserAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36"
@@ -44,6 +46,27 @@ type Streamer interface {
 }
 
 var siteOrder = []string{"safebooru", "rule34", "pornhub", "xvideos", "xhamster"}
+
+var mediaHostSuffixes = map[string][]string{
+	"pornhub":  {"pornhub.com", "pornhub.org", "phncdn.com"},
+	"xvideos":  {"xvideos.com", "xvideos.es", "xvideos-cdn.com", "evaxxx.com"},
+	"xhamster": {"xhamster.com", "xhamster.desi", "xhcdn.com"},
+}
+
+func MediaHostAllowed(site, rawURL string) bool {
+	suffixes := mediaHostSuffixes[strings.ToLower(strings.TrimSpace(site))]
+	if len(suffixes) == 0 {
+		return false
+	}
+	return safe.HostIn(safe.Host(rawURL), suffixes)
+}
+
+func streamFor(site, rawURL, cookie, referer string) Stream {
+	if cookie != "" && !MediaHostAllowed(site, rawURL) {
+		cookie = ""
+	}
+	return Stream{URL: rawURL, Cookie: cookie, Referer: referer}
+}
 
 func SiteNames() []string {
 	names := make([]string, len(siteOrder))
@@ -100,12 +123,13 @@ var (
 )
 
 func newSiteHTTPClient() *http.Client {
+	dialer := &net.Dialer{
+		Timeout:   15 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}
 	transport := &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		DialContext: (&net.Dialer{
-			Timeout:   15 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           safe.PublicDialContext(dialer),
 		MaxIdleConns:          16,
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   15 * time.Second,
@@ -383,12 +407,12 @@ func parsePornHubSearch(body []byte) []Post {
 			ID:       id,
 			Site:     "pornhub",
 			Video:    true,
-			PageURL:  "https://www.pornhub.com" + href,
-			Thumb:    firstMatch(phThumbRe, item),
-			Duration: firstMatch(phDurRe, item),
+			PageURL:  safe.URLText("https://www.pornhub.com" + href),
+			Thumb:    safe.URLText(firstMatch(phThumbRe, item)),
+			Duration: safe.Limit(firstMatch(phDurRe, item), 16),
 		}
 		if len(title) > 1 {
-			post.Title = html.UnescapeString(title[1])
+			post.Title = safe.Text(html.UnescapeString(title[1]))
 		}
 		posts = append(posts, post)
 	}
@@ -512,7 +536,7 @@ func pornhubResolve(session *http.Client, entries []phMedia, cookie, pageURL str
 		}
 		reachable, dead := hlsReachable(session, entry.VideoURL, pageURL)
 		if reachable {
-			return Stream{URL: entry.VideoURL, Cookie: cookie, Referer: pageURL}, true, false
+			return streamFor("pornhub", entry.VideoURL, cookie, pageURL), true, false
 		}
 		if dead {
 			return Stream{}, false, true
@@ -537,21 +561,13 @@ func pornhubProgressive(session *http.Client, entries []phMedia, cookie, pageURL
 		sort.Slice(formats, func(i, j int) bool { return formats[i].Height > formats[j].Height })
 		for _, format := range formats {
 			mediaURL := strings.ReplaceAll(format.VideoURL, `\/`, `/`)
-			if !validMediaScheme(mediaURL) || !segmentReachable(session, mediaURL, pageURL) {
+			if !safe.MediaURL(mediaURL) || !segmentReachable(session, mediaURL, pageURL) {
 				continue
 			}
-			return Stream{URL: mediaURL, Cookie: cookie, Referer: pageURL}, true
+			return streamFor("pornhub", mediaURL, cookie, pageURL), true
 		}
 	}
 	return Stream{}, false
-}
-
-func validMediaScheme(raw string) bool {
-	parsed, err := url.Parse(raw)
-	if err != nil {
-		return false
-	}
-	return parsed.Scheme == "https" || parsed.Scheme == "http"
 }
 
 func hlsReachable(client *http.Client, masterURL, referer string) (bool, bool) {
@@ -674,7 +690,7 @@ func parseXVideosTags(body []byte) []string {
 		if slug == "" {
 			continue
 		}
-		name := strings.Join(strings.Fields(strings.ReplaceAll(slug, "-", " ")), " ")
+		name := safe.Tag(strings.Join(strings.Fields(strings.ReplaceAll(slug, "-", " ")), " "))
 		key := strings.ToLower(name)
 		if name == "" || seen[key] {
 			continue
@@ -716,12 +732,12 @@ func parseXVideosSearch(body []byte) []Post {
 			ID:       id,
 			Site:     "xvideos",
 			Video:    true,
-			PageURL:  "https://www.xvideos.com" + href,
-			Thumb:    firstMatch(xvThumbRe, chunk),
-			Duration: firstMatch(xvDurRe, chunk),
+			PageURL:  safe.URLText("https://www.xvideos.com" + href),
+			Thumb:    safe.URLText(firstMatch(xvThumbRe, chunk)),
+			Duration: safe.Limit(firstMatch(xvDurRe, chunk), 16),
 		}
 		if title := firstMatch(xvTitleRe, chunk); title != "" {
-			post.Title = html.UnescapeString(title)
+			post.Title = safe.Text(html.UnescapeString(title))
 		}
 		posts = append(posts, post)
 	}
@@ -846,9 +862,9 @@ func parseXHamsterSuggestions(body []byte) []string {
 	}
 	tags := make([]string, 0, len(payload.Tags))
 	for _, tag := range payload.Tags {
-		text := strings.TrimSpace(tag.Text)
+		text := safe.Tag(tag.Text)
 		if text == "" {
-			text = strings.TrimSpace(tag.PlainText)
+			text = safe.Tag(tag.PlainText)
 		}
 		if text != "" {
 			tags = append(tags, html.UnescapeString(text))
@@ -887,12 +903,12 @@ func parseXHamsterSearch(body []byte) []Post {
 			ID:       id,
 			Site:     "xhamster",
 			Video:    true,
-			PageURL:  href,
-			Thumb:    firstMatch(xhThumbRe, chunk),
-			Duration: firstMatch(xhDurRe, chunk),
+			PageURL:  safe.URLText(href),
+			Thumb:    safe.URLText(firstMatch(xhThumbRe, chunk)),
+			Duration: safe.Limit(firstMatch(xhDurRe, chunk), 16),
 		}
 		if label := firstMatch(xhLabelRe, chunk); label != "" {
-			post.Title = html.UnescapeString(label)
+			post.Title = safe.Text(html.UnescapeString(label))
 		}
 		posts = append(posts, post)
 	}
@@ -948,8 +964,5 @@ func xhamsterStreamURL(page string) string {
 		return ""
 	}
 	streamURL = strings.ReplaceAll(streamURL, `\/`, `/`)
-	if strings.Contains(streamURL, ".av1.mp4.m3u8") {
-		streamURL = strings.Replace(streamURL, ".av1.mp4.m3u8", ".h264.mp4.m3u8", 1)
-	}
-	return streamURL
+	return strings.Replace(streamURL, ".av1.mp4.m3u8", ".h264.mp4.m3u8", 1)
 }

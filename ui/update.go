@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"moxiu/r34-dl/conf"
+	"moxiu/r34-dl/safe"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -292,15 +293,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case singleDownloadMsg:
 		if msg.err != nil {
-			m.notice = errorStyle.Render("download failed: " + msg.err.Error())
+			m.notice = errorStyle.Render("download failed: " + safe.Text(msg.err.Error()))
 		} else {
-			m.notice = noticeStyle.Render("saved → " + msg.path)
+			m.notice = noticeStyle.Render("saved → " + safe.Text(msg.path))
 		}
 		return m, nil
 
 	case imageFetchedMsg:
 		if msg.err != nil {
-			m.viewerErr = msg.err.Error()
+			m.viewerErr = safe.Text(msg.err.Error())
 			m.state = stateViewer
 			return m, nil
 		}
@@ -367,7 +368,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.stopVideo()
 		if msg.err != nil {
-			m.viewerErr = msg.err.Error()
+			m.viewerErr = safe.Text(msg.err.Error())
 			m.state = stateViewer
 		} else {
 			m.state = stateList
@@ -379,7 +380,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cursor, m.offset, m.page = 0, 0, 0
 		m.notice = ""
 		if msg.err != nil {
-			m.err = msg.err.Error()
+			m.err = safe.Text(msg.err.Error())
 			m.posts = nil
 		} else {
 			m.posts = msg.posts
@@ -414,7 +415,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case loadMoreMsg:
 		m.loadingMore = false
 		if msg.err != nil {
-			m.notice = "couldn't load more: " + msg.err.Error()
+			m.notice = "couldn't load more: " + safe.Text(msg.err.Error())
 			return m, nil
 		}
 		if len(msg.posts) == 0 {
@@ -430,17 +431,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.notice = ""
 		m.cursor++
 		return m, m.clampViewport()
-
-	case resultMsg:
-		if msg.Err != nil {
-			m.failed++
-		} else {
-			m.done++
-		}
-		return m, waitForResult(m.results)
-
-	case doneMsg:
-		m.state = stateDone
 
 	case blinkMsg:
 		if m.state == stateSearch {
