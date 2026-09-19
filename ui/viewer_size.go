@@ -16,7 +16,10 @@ const (
 	previewMaxRows        = 25
 )
 
-const videoZoom = 1.25
+const (
+	imageZoom = 1.2
+	videoZoom = 1.25
+)
 
 func previewCols(termCols int) int {
 	cols := int(float64(termCols) * previewWidthFraction)
@@ -55,6 +58,24 @@ func previewRows(termRows int) int {
 func videoBox(termCols, termRows int) (int, int) {
 	cols := int(math.Round(float64(previewCols(termCols)) * videoZoom))
 	rows := int(math.Round(float64(previewRows(termRows)) * videoZoom))
+	if limit := termCols - 2; cols > limit {
+		cols = limit
+	}
+	if limit := termRows - 2; rows > limit {
+		rows = limit
+	}
+	if cols < 2 {
+		cols = 2
+	}
+	if rows < 2 {
+		rows = 2
+	}
+	return cols, rows
+}
+
+func imageBox(termCols, termRows int) (int, int) {
+	cols := int(math.Round(float64(previewCols(termCols)) * imageZoom))
+	rows := int(math.Round(float64(previewRows(termRows)) * imageZoom))
 	if limit := termCols - 2; cols > limit {
 		cols = limit
 	}

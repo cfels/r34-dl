@@ -76,6 +76,8 @@ func keyByName(name string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyEnter}
 	case "right":
 		return tea.KeyMsg{Type: tea.KeyRight}
+	case "left":
+		return tea.KeyMsg{Type: tea.KeyLeft}
 	case "down":
 		return tea.KeyMsg{Type: tea.KeyDown}
 	case "up":
@@ -216,56 +218,76 @@ func TestShiftArrowsPickPredictions(t *testing.T) {
 	}
 }
 
-func TestPlainUpWalksBackOutOfPredictionBar(t *testing.T) {
+func TestArrowsPickPredictions(t *testing.T) {
 	m := suggestModel(map[string][]string{
 		"cat_g": {"cat_girl", "cat_gloves", "cat_girls"},
 	}, nil)
 	m = typeKeys(t, m, "c", "a", "t", "_", "g")
-	m = typeKeys(t, m, "shift+down")
-	m = typeKeys(t, m, "shift+down")
+
+	m = typeKeys(t, m, "right")
 	if !m.suggestPick {
-		t.Fatal("shift+down should be picking")
+		t.Fatal("right should pick from the prediction bar")
+	}
+	if ghost := m.ghostSuggestion(); ghost != "irl" {
+		t.Errorf("first pick ghost = %q, want irl", ghost)
+	}
+	m = typeKeys(t, m, "right")
+	if ghost := m.ghostSuggestion(); ghost != "loves" {
+		t.Errorf("right should move forward, ghost = %q", ghost)
+	}
+	m = typeKeys(t, m, "left")
+	if ghost := m.ghostSuggestion(); ghost != "irl" {
+		t.Errorf("left should move back, ghost = %q", ghost)
+	}
+	m = typeKeys(t, m, "left")
+	if ghost := m.ghostSuggestion(); ghost != "irls" {
+		t.Errorf("left should wrap to the last prediction, ghost = %q", ghost)
 	}
 
-	m = typeKeys(t, m, "up")
-	if !m.suggestPick {
-		t.Error("plain up should step back through the picks first")
+	m = typeKeys(t, m, "enter")
+	if m.query != "cat_girls" {
+		t.Fatalf("enter should accept the picked tag, query = %q", m.query)
 	}
-	if m.suggestIdx != 0 {
-		t.Errorf("suggestIdx = %d, want back to the first suggestion", m.suggestIdx)
-	}
-
-	m = typeKeys(t, m, "up")
 	if m.suggestPick {
-		t.Error("plain up on the first pick should leave the prediction bar")
-	}
-	if m.query != "cat_g" {
-		t.Errorf("typing box changed to %q, want cat_g", m.query)
-	}
-	if m.suggestIdx != 0 {
-		t.Errorf("suggestIdx = %d, want back to the first suggestion", m.suggestIdx)
+		t.Error("picking should end once the tag is accepted")
 	}
 }
 
-func TestPlainDownPicksTagAndUpRecallsHistory(t *testing.T) {
-	m := suggestModel(nil, []string{"cat_girl solo"})
+func TestUpDownOnlyWalkHistory(t *testing.T) {
+	m := suggestModel(map[string][]string{
+		"cat_g": {"cat_girl", "cat_gloves"},
+	}, []string{"cat_girl solo"})
 	m = typeKeys(t, m, "c", "a", "t", "_", "g")
-	m = typeKeys(t, m, "down")
-	if !m.suggestPick {
-		t.Fatal("plain down should pick from the bar")
-	}
-	if got := m.suggestionAt(m.suggestIdx); got != "cat_girl" {
-		t.Errorf("picked %q, want cat_girl", got)
+	if len(m.suggestions) == 0 {
+		t.Fatal("expected predictions before pressing up/down")
 	}
 
-	m = suggestModel(nil, []string{"cat_girl solo"})
+	m = typeKeys(t, m, "down")
+	if m.suggestPick {
+		t.Error("down should not pick from the prediction bar")
+	}
+	if m.suggestIdx != 0 {
+		t.Errorf("down moved the prediction cursor to %d", m.suggestIdx)
+	}
+	if m.query != "cat_g" {
+		t.Errorf("query = %q, want the typed word untouched", m.query)
+	}
+
+	m = suggestModel(map[string][]string{
+		"cat_g": {"cat_girl", "cat_gloves"},
+	}, []string{"cat_girl solo"})
+	m = typeKeys(t, m, "c", "a", "t", "_", "g")
 	m = typeKeys(t, m, "up")
 	if m.query != "cat_girl solo" {
-		t.Fatalf("query = %q, want the recalled history entry", m.query)
+		t.Fatalf("up should recall history, query = %q", m.query)
 	}
-	m = typeKeys(t, m, "ctrl+n")
+	m = typeKeys(t, m, "down")
 	if m.query != "" {
-		t.Fatalf("ctrl+n should clear back to an empty query, got %q", m.query)
+		t.Fatalf("down should step back out of history, query = %q", m.query)
+	}
+	m = typeKeys(t, m, "down")
+	if m.query != "" {
+		t.Errorf("down past the newest entry should stay empty, query = %q", m.query)
 	}
 }
 
@@ -294,20 +316,19 @@ func TestTabSwitchesSiteWhenNothingToAccept(t *testing.T) {
 	}
 }
 
-func TestRightArrowCompletesPrediction(t *testing.T) {
-	m := suggestModel(map[string][]string{
-		"cat_g": {"cat_girl"},
-	}, nil)
-	m = typeKeys(t, m, "c", "a", "t", "_", "g")
-	if ghost := m.ghostSuggestion(); ghost != "irl" {
-		t.Fatalf("ghost = %q, want irl", ghost)
+func TestArrowsMoveCursorWithoutPredictions(t *testing.T) {
+	m := suggestModel(nil, nil)
+	m = typeKeys(t, m, "a", "b")
+	if len(m.suggestions) != 0 {
+		t.Fatalf("expected no predictions, got %v", m.suggestions)
+	}
+	m = typeKeys(t, m, "left")
+	if m.inputCursor != 1 {
+		t.Fatalf("cursor = %d, want 1", m.inputCursor)
 	}
 	m = typeKeys(t, m, "right")
-	if m.query != "cat_girl" {
-		t.Fatalf("right arrow should take the inline completion, query = %q", m.query)
-	}
-	if m.inputCursor != len([]rune("cat_girl")) {
-		t.Errorf("cursor = %d, want %d", m.inputCursor, len([]rune("cat_girl")))
+	if m.inputCursor != 2 {
+		t.Fatalf("cursor = %d, want 2", m.inputCursor)
 	}
 }
 
@@ -316,9 +337,9 @@ func TestEscLeavesPredictionBar(t *testing.T) {
 		"cat_g": {"cat_girl", "cat_gloves"},
 	}, nil)
 	m = typeKeys(t, m, "c", "a", "t", "_", "g")
-	m = typeKeys(t, m, "down")
+	m = typeKeys(t, m, "right")
 	if !m.suggestPick {
-		t.Fatal("plain down should pick from the bar")
+		t.Fatal("right should pick from the bar")
 	}
 	m = typeKeys(t, m, "esc")
 	if m.suggestPick {

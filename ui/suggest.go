@@ -215,13 +215,6 @@ func (m *Model) canAcceptSuggestion() bool {
 	return !strings.EqualFold(m.suggestionAt(m.suggestIdx), m.suggestWord)
 }
 
-func (m *Model) acceptGhost() bool {
-	if m.ghostSuggestion() == "" {
-		return false
-	}
-	return m.acceptSuggestion()
-}
-
 func (m *Model) acceptSuggestion() bool {
 	if len(m.suggestions) == 0 || m.suggestWord == "" {
 		return false

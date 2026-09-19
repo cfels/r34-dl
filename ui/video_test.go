@@ -307,6 +307,25 @@ func TestVideoBoxIsBigger(t *testing.T) {
 	}
 }
 
+func TestImageBoxIsBigger(t *testing.T) {
+	for _, term := range []struct {
+		cols, rows int
+	}{{80, 24}, {100, 30}, {200, 60}} {
+		cols, rows := imageBox(term.cols, term.rows)
+		baseCols, baseRows := previewCols(term.cols), previewRows(term.rows)
+		if cols <= baseCols || rows <= baseRows {
+			t.Errorf("image box %dx%d is not bigger than the preview box %dx%d", cols, rows, baseCols, baseRows)
+		}
+		if cols > term.cols-2 || rows > term.rows-2 {
+			t.Errorf("image box %dx%d does not fit terminal %dx%d", cols, rows, term.cols, term.rows)
+		}
+		growth := float64(cols) / float64(baseCols)
+		if growth < 1.1 || growth > 1.3 {
+			t.Errorf("image width grew %.3fx at %dx%d, want about 1.2x", growth, term.cols, term.rows)
+		}
+	}
+}
+
 func TestPreviewBoxStaysModest(t *testing.T) {
 	if cols := previewCols(100); cols < 70 || cols > 80 {
 		t.Errorf("previewCols(100) = %d, want a modest share of the width", cols)

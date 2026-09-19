@@ -252,10 +252,10 @@ func (m Model) View() string {
 		}
 		hint := "tab: switch site · shift+tab: back · enter: search · ↑/↓: history"
 		if len(m.suggestions) > 0 {
-			hint = "↓: pick tag · tab/Y: accept · →: complete · enter: search · ↑: history"
+			hint = "←/→: pick tag · tab/Y: accept · enter: search · ↑/↓: history"
 		}
 		if m.suggestPick {
-			hint = "↑/↓: move · tab/Y/enter: accept · esc: back to typing"
+			hint = "←/→: move · tab/Y/enter: accept · esc: back to typing"
 		}
 		s += dimStyle.Render(hint)
 		return s

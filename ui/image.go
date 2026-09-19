@@ -149,7 +149,8 @@ func renderImage(data []byte, termCols, termRows int) tea.Cmd {
 		if err != nil {
 			return imageFetchedMsg{err: fmt.Errorf("decode image: %w", err)}
 		}
-		scaled := scaleToFit(img, previewCols(termCols), previewRows(termRows))
+		cols, rows := imageBox(termCols, termRows)
+		scaled := scaleToFit(img, cols, rows)
 		s, err := encodeImage(scaled)
 		if err != nil {
 			return imageFetchedMsg{err: fmt.Errorf("render: %w", err)}

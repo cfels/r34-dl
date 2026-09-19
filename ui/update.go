@@ -83,36 +83,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, m.startSearch()
 				}
 			case tea.KeyUp:
-				if m.suggestPick {
-					if m.suggestIdx == 0 {
-						m.suggestPick = false
-						return m, nil
-					}
-					m.cycleSuggestion(-1)
-					return m, nil
-				}
-				m.suggestPick = false
-				if len(m.history) > 0 && m.historyIdx > 0 {
-					m.historyIdx--
-					m.query = m.history[m.historyIdx]
-					m.inputCursor = len([]rune(m.query))
-				}
-				return m, m.refreshSuggestions()
+				return m, m.historyBack()
 			case tea.KeyDown:
-				if m.pickSuggestion(1) {
-					return m, nil
-				}
-				m.suggestPick = false
-				if m.historyIdx < len(m.history)-1 {
-					m.historyIdx++
-					m.query = m.history[m.historyIdx]
-					m.inputCursor = len([]rune(m.query))
-				} else if m.historyIdx == len(m.history)-1 {
-					m.historyIdx = len(m.history)
-					m.query = ""
-					m.inputCursor = 0
-				}
-				return m, m.refreshSuggestions()
+				return m, m.historyForward()
 			case tea.KeyShiftUp:
 				if m.pickSuggestion(-1) {
 					return m, nil
@@ -134,32 +107,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			case tea.KeyCtrlP:
-				m.suggestPick = false
-				if len(m.history) > 0 && m.historyIdx > 0 {
-					m.historyIdx--
-					m.query = m.history[m.historyIdx]
-					m.inputCursor = len([]rune(m.query))
-				}
-				return m, m.refreshSuggestions()
+				return m, m.historyBack()
 			case tea.KeyCtrlN:
-				m.suggestPick = false
-				if m.historyIdx < len(m.history)-1 {
-					m.historyIdx++
-					m.query = m.history[m.historyIdx]
-					m.inputCursor = len([]rune(m.query))
-				} else if m.historyIdx == len(m.history)-1 {
-					m.historyIdx = len(m.history)
-					m.query = ""
-					m.inputCursor = 0
-				}
-				return m, m.refreshSuggestions()
+				return m, m.historyForward()
 			case tea.KeyLeft:
+				if m.pickSuggestion(-1) {
+					return m, nil
+				}
 				if m.inputCursor > 0 {
 					m.inputCursor--
 				}
 				return m, m.refreshSuggestions()
 			case tea.KeyRight:
-				if m.inputCursor >= len([]rune(m.query)) && m.acceptGhost() {
+				if m.pickSuggestion(1) {
 					return m, nil
 				}
 				if m.inputCursor < len([]rune(m.query)) {
@@ -440,4 +400,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+func (m *Model) historyBack() tea.Cmd {
+	m.suggestPick = false
+	if len(m.history) > 0 && m.historyIdx > 0 {
+		m.historyIdx--
+		m.query = m.history[m.historyIdx]
+		m.inputCursor = len([]rune(m.query))
+	}
+	return m.refreshSuggestions()
+}
+
+func (m *Model) historyForward() tea.Cmd {
+	m.suggestPick = false
+	if m.historyIdx < len(m.history)-1 {
+		m.historyIdx++
+		m.query = m.history[m.historyIdx]
+		m.inputCursor = len([]rune(m.query))
+	} else if m.historyIdx == len(m.history)-1 {
+		m.historyIdx = len(m.history)
+		m.query = ""
+		m.inputCursor = 0
+	}
+	return m.refreshSuggestions()
 }
