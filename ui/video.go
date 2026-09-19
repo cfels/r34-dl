@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"image/png"
 	"io"
 	"math"
 	"os/exec"
@@ -22,16 +23,22 @@ import (
 )
 
 const (
-	videoMaxFPS    = 120
 	videoUserAgent = "r34-dl/viewer"
 
 	mediaProtocolWhitelist = "http,https,tcp,tls,crypto"
 	mediaReadTimeout       = "60000000"
+
+	videoProbeTimeout = 4 * time.Second
 )
 
 const (
 	kittyGraphicsPrefix = "\x1b_Ga=T"
 	kittyTransmitPrefix = "\x1b_Ga=T,f=100,m=1;"
+)
+
+const (
+	kittyImageIDCycle = 1 << 20
+	kittyStaleLimit   = 4
 )
 
 var videoExts = map[string]bool{
@@ -59,12 +66,14 @@ type videoPlayer struct {
 
 	width   int
 	height  int
-	fps     float64
 	source  string
 	headers string
 
 	frames chan image.Image
 	done   chan struct{}
+
+	fpsMu sync.Mutex
+	fps   float64
 
 	audioMu   sync.Mutex
 	audio     *exec.Cmd
@@ -73,6 +82,7 @@ type videoPlayer struct {
 
 	idMu     sync.Mutex
 	frameSeq int
+	pending  []int
 
 	stopOnce sync.Once
 	waitOnce sync.Once
@@ -111,13 +121,6 @@ func videoFitSize(termCols, termRows, srcW, srcH int) (int, int) {
 	return w, h
 }
 
-func videoRateFilter(rate float64) string {
-	if rate > videoMaxFPS {
-		return fmt.Sprintf("fps=%d", videoMaxFPS)
-	}
-	return ""
-}
-
 func streamHeaders(stream api.Stream, site string) string {
 	var headers strings.Builder
 	allowedHost := api.MediaHostAllowed(site, stream.URL)
@@ -147,23 +150,14 @@ func startStreamPlayer(stream api.Stream, post api.Post, termCols, termRows int,
 		return nil, fmt.Errorf("refusing to play unsupported media url for post %d", post.ID)
 	}
 	headers := streamHeaders(stream, post.Site)
-	info := probeSource(rawURL, headers)
 	srcW, srcH := post.Width, post.Height
-	if info.width > 0 && info.height > 0 {
-		srcW, srcH = info.width, info.height
-	}
 	w, h := videoFitSize(termCols, termRows, srcW, srcH)
 	scale := fmt.Sprintf(
 		"scale=%d:%d:force_original_aspect_ratio=decrease,"+
 			"pad=%d:%d:(ow-iw)/2:(oh-ih)/2:color=black",
 		w, h, w, h,
 	)
-	parts := []string{scale}
-	if rate := videoRateFilter(info.fps); rate != "" {
-		parts = append(parts, rate)
-	}
-	parts = append(parts, "setsar=1", "format=rgba")
-	filter := strings.Join(parts, ",")
+	filter := strings.Join([]string{scale, "setsar=1", "format=rgba"}, ",")
 	cmd := exec.Command(
 		"ffmpeg",
 		"-loglevel", "error",
@@ -193,7 +187,6 @@ func startStreamPlayer(stream api.Stream, post api.Post, termCols, termRows int,
 		cmd:     cmd,
 		width:   w,
 		height:  h,
-		fps:     info.fps,
 		source:  rawURL,
 		headers: headers,
 		muted:   !opts.audio,
@@ -213,17 +206,34 @@ func startStreamPlayer(stream api.Stream, post api.Post, termCols, termRows int,
 		return nil, err
 	}
 	go vp.readFrames()
+	go vp.probeFramerate(rawURL, headers)
 	return vp, nil
 }
 
+func (vp *videoPlayer) probeFramerate(rawURL, headers string) {
+	info := probeSource(rawURL, headers)
+	if info.fps <= 0 {
+		return
+	}
+	vp.fpsMu.Lock()
+	vp.fps = info.fps
+	vp.fpsMu.Unlock()
+}
+
 func (vp *videoPlayer) fpsLabel() string {
-	if vp == nil || vp.fps <= 0 {
+	if vp == nil {
 		return ""
 	}
-	if math.Abs(vp.fps-math.Round(vp.fps)) < 0.01 {
-		return fmt.Sprintf("%.0ffps", vp.fps)
+	vp.fpsMu.Lock()
+	fps := vp.fps
+	vp.fpsMu.Unlock()
+	if fps <= 0 {
+		return ""
 	}
-	return fmt.Sprintf("%.2ffps", vp.fps)
+	if math.Abs(fps-math.Round(fps)) < 0.01 {
+		return fmt.Sprintf("%.0ffps", fps)
+	}
+	return fmt.Sprintf("%.2ffps", fps)
 }
 
 func isHTTP(rawURL string) bool {
@@ -236,8 +246,20 @@ type sourceInfo struct {
 	height int
 }
 
+var (
+	probeSourceMu sync.Mutex
+	probeSourceFn = probeStream
+)
+
 func probeSource(rawURL, headers string) sourceInfo {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	probeSourceMu.Lock()
+	fn := probeSourceFn
+	probeSourceMu.Unlock()
+	return fn(rawURL, headers)
+}
+
+func probeStream(rawURL, headers string) sourceInfo {
+	ctx, cancel := context.WithTimeout(context.Background(), videoProbeTimeout)
 	defer cancel()
 	args := []string{
 		"-v", "error",
@@ -315,17 +337,15 @@ func parseRate(s string) (float64, bool) {
 func (vp *videoPlayer) readFrames() {
 	defer close(vp.frames)
 	stride := vp.width * 4
-	buf := make([]byte, stride*vp.height)
 	started := false
 	for {
-		if _, err := io.ReadFull(vp.stdout, buf); err != nil {
+		pix := make([]byte, stride*vp.height)
+		if _, err := io.ReadFull(vp.stdout, pix); err != nil {
 			if !vp.stopped() && err != io.EOF && err != io.ErrUnexpectedEOF {
 				vp.setErr(fmt.Errorf("video stream: %w", err))
 			}
 			break
 		}
-		pix := make([]byte, len(buf))
-		copy(pix, buf)
 		img := &image.RGBA{
 			Pix:    pix,
 			Stride: stride,
@@ -533,25 +553,28 @@ func nextFrame(vp *videoPlayer) tea.Cmd {
 	}
 }
 
+func videoFrameView(frame, status string) string {
+	if !strings.HasPrefix(frame, kittyGraphicsPrefix) {
+		return frame + "\n" + status
+	}
+	return status + "\n" + strings.TrimSuffix(frame, "\n")
+}
+
 func renderVideoFrame(vp *videoPlayer, img image.Image, termCols, termRows int) tea.Cmd {
 	return func() tea.Msg {
 		cols, rows := videoBox(termCols, termRows)
 		scaled := scaleToFit(img, cols, rows)
-		s, err := encodeImage(scaled)
+		cur, stale := vp.kittyFrameIDs()
+		s, err := encodeVideoFrame(scaled, cur, stale)
 		if err != nil {
 			return videoDoneMsg{vp: vp, err: fmt.Errorf("render frame: %w", err)}
 		}
-		return videoRenderedMsg{vp: vp, s: swapKittyImage(vp, s)}
+		return videoRenderedMsg{vp: vp, s: s}
 	}
 }
 
-func swapKittyImage(vp *videoPlayer, s string) string {
-	if !strings.Contains(s, kittyTransmitPrefix) {
-		return s
-	}
-	cur, prev := vp.kittyImageIDs()
-	s = strings.Replace(s, kittyTransmitPrefix, kittyTransmit(cur), 1)
-	return s + kittyDeleteImage(prev)
+func encodeVideoFrame(img image.Image, id int, stale []int) (string, error) {
+	return encodeTermImage(img, png.NoCompression, kittyTransmit(id), kittyDeleteImages(stale))
 }
 
 func kittyTransmit(id int) string {
@@ -562,9 +585,28 @@ func kittyDeleteImage(id int) string {
 	return fmt.Sprintf("\x1b_Ga=d,d=I,i=%d,q=2;\x1b\\", id)
 }
 
-func (vp *videoPlayer) kittyImageIDs() (int, int) {
+func kittyDeleteImages(ids []int) string {
+	var b strings.Builder
+	for _, id := range ids {
+		b.WriteString(kittyDeleteImage(id))
+	}
+	return b.String()
+}
+
+func (vp *videoPlayer) kittyFrameIDs() (int, []int) {
 	vp.idMu.Lock()
 	defer vp.idMu.Unlock()
 	vp.frameSeq++
-	return 1 + vp.frameSeq%2, 1 + (vp.frameSeq+1)%2
+	id := 1 + vp.frameSeq%kittyImageIDCycle
+	stale := make([]int, 0, len(vp.pending))
+	for _, old := range vp.pending {
+		if old != id {
+			stale = append(stale, old)
+		}
+	}
+	vp.pending = append(vp.pending, id)
+	if len(vp.pending) > kittyStaleLimit {
+		vp.pending = append(vp.pending[:0], vp.pending[len(vp.pending)-kittyStaleLimit:]...)
+	}
+	return id, stale
 }

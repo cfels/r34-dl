@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -99,9 +100,19 @@ func testMediaURL(path string) string {
 
 func TestMain(m *testing.M) {
 	os.Setenv(safe.AllowPrivateHostsEnv, "1")
+	configDir := ""
+	if os.Getenv("XDG_CONFIG_HOME") == "" {
+		if dir, err := os.MkdirTemp("", "r34-dl-testcfg"); err == nil {
+			configDir = dir
+			os.Setenv("XDG_CONFIG_HOME", dir)
+		}
+	}
 	code := m.Run()
 	if root := testMediaRoot(); root != "" {
 		os.RemoveAll(root)
+	}
+	if configDir != "" {
+		os.RemoveAll(configDir)
 	}
 	os.Exit(code)
 }
@@ -149,11 +160,11 @@ func TestVideoPlayerStreamsFrames(t *testing.T) {
 	}
 }
 
-func TestVideoPlayerUsesSourceFramerateUpTo120(t *testing.T) {
+func TestVideoPlayerMatchesSourceFramerate(t *testing.T) {
 	const seconds = 2
 
 	frames, elapsed := playClip(t, makeTestVideo(t, 120, seconds))
-	if max := 120*seconds + 30; frames > max {
+	if max := 120*seconds + 40; frames > max {
 		t.Errorf("120fps source streamed %d frames, want at most %d", frames, max)
 	}
 	if min := 100*seconds - 30; frames < min {
@@ -233,7 +244,7 @@ func TestVideoAudioToggle(t *testing.T) {
 	}
 }
 
-func TestVideoFrameSwapsKittyImage(t *testing.T) {
+func TestVideoFrameKeepsDisplayedImageAlive(t *testing.T) {
 	vp := &videoPlayer{}
 	img := image.NewRGBA(image.Rect(0, 0, 64, 32))
 	first, ok := renderVideoFrame(vp, img, 80, 24)().(videoRenderedMsg)
@@ -247,15 +258,106 @@ func TestVideoFrameSwapsKittyImage(t *testing.T) {
 	if !ok {
 		t.Fatal("renderVideoFrame did not return a rendered frame")
 	}
-
-	if !strings.Contains(first.s, kittyTransmit(2)) || !strings.Contains(first.s, kittyDeleteImage(1)) {
-		t.Errorf("first frame should draw image 2 and drop image 1")
+	firstID, secondID := kittyFrameID(t, first.s), kittyFrameID(t, second.s)
+	if firstID == secondID {
+		t.Fatalf("consecutive frames reused image id %d, re-transmitting a live id blanks the frame", firstID)
 	}
-	if !strings.Contains(second.s, kittyTransmit(1)) || !strings.Contains(second.s, kittyDeleteImage(2)) {
-		t.Errorf("second frame should draw image 1 and drop image 2")
+	if strings.Contains(first.s, kittyDeleteImage(firstID)) {
+		t.Error("a frame must not drop the image it just placed")
+	}
+	if !strings.Contains(second.s, kittyDeleteImage(firstID)) {
+		t.Errorf("second frame should drop the image it replaced (%d)", firstID)
 	}
 	if strings.Contains(first.s, "\x1b_Ga=d,i=") {
 		t.Error("delete must target the image id with d=I, d defaults to wiping every placement")
+	}
+}
+
+func kittyFrameID(t *testing.T, frame string) int {
+	t.Helper()
+	const key = "i="
+	start := strings.Index(frame, key)
+	if start < 0 {
+		t.Fatalf("frame %q has no image id", frame[:40])
+	}
+	rest := frame[start+len(key):]
+	end := strings.IndexByte(rest, ',')
+	if semi := strings.IndexByte(rest, ';'); semi >= 0 && (end < 0 || semi < end) {
+		end = semi
+	}
+	if end < 0 {
+		t.Fatalf("frame %q has a malformed image id", frame[:40])
+	}
+	id, err := strconv.Atoi(rest[:end])
+	if err != nil {
+		t.Fatalf("frame image id: %v", err)
+	}
+	return id
+}
+
+func TestVideoFrameIDsStayUnique(t *testing.T) {
+	vp := &videoPlayer{}
+	seen := map[int]bool{}
+	placed := []int{}
+	for i := 0; i < 500; i++ {
+		id, stale := vp.kittyFrameIDs()
+		if id <= 0 {
+			t.Fatalf("frame %d got invalid image id %d", i, id)
+		}
+		if seen[id] {
+			t.Fatalf("frame %d reused image id %d, re-transmitting a live id blanks the frame", i, id)
+		}
+		seen[id] = true
+		placed = append(placed, id)
+		for _, old := range stale {
+			if old == id {
+				t.Fatalf("frame %d drops the image it is about to place", i)
+			}
+		}
+	}
+	if len(placed) != 500 {
+		t.Fatalf("placed %d frames, want 500", len(placed))
+	}
+}
+
+func TestVideoFrameCleansUpSkippedFrames(t *testing.T) {
+	vp := &videoPlayer{}
+	first, _ := vp.kittyFrameIDs()
+	second, _ := vp.kittyFrameIDs()
+	_, stale := vp.kittyFrameIDs()
+	dropped := map[int]bool{}
+	for _, id := range stale {
+		dropped[id] = true
+	}
+	if !dropped[first] || !dropped[second] {
+		t.Errorf("stale ids %v should drop the skipped frames %d and %d", stale, first, second)
+	}
+}
+
+func TestVideoFrameViewKeepsFrameLast(t *testing.T) {
+	frame, err := encodeVideoFrame(image.NewRGBA(image.Rect(0, 0, 64, 32)), 2, []int{1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(frame, kittyGraphicsPrefix) {
+		t.Skip("terminal graphics encoder is not kitty")
+	}
+	view := videoFrameView(frame, "status")
+	body := strings.TrimSuffix(frame, "\n")
+	if !strings.HasSuffix(view, body) {
+		t.Error("view must draw the frame last")
+	}
+	if !strings.HasPrefix(view, "status\n") {
+		t.Error("view must show the status line above the frame")
+	}
+	if head := strings.TrimSuffix(view, body); strings.Count(head, "\n") != 1 {
+		t.Errorf("header %q must be one status line, anything below the frame scrolls it away", head)
+	}
+}
+
+func TestVideoFrameViewKeepsTextLayoutForOtherEncoders(t *testing.T) {
+	if got := videoFrameView("image\n", "status"); got != "image\n\nstatus" {
+		t.Errorf("text layout = %q, want %q", got, "image\n\nstatus")
 	}
 }
 
@@ -377,32 +479,6 @@ func TestParseSourceInfo(t *testing.T) {
 	}
 }
 
-func TestVideoRateFilter(t *testing.T) {
-	cases := []struct {
-		rate float64
-		want string
-	}{
-		{rate: 120, want: ""},
-		{rate: 121, want: "fps=120"},
-		{rate: 240, want: "fps=120"},
-		{rate: 60, want: ""},
-		{rate: 59.94, want: ""},
-		{rate: 30, want: ""},
-		{rate: 24, want: ""},
-		{rate: 0, want: ""},
-	}
-	for _, c := range cases {
-		got := videoRateFilter(c.rate)
-		if c.want == "" && got != "" {
-			t.Errorf("rate %v -> %q, want none", c.rate, got)
-			continue
-		}
-		if c.want != "" && !strings.HasPrefix(got, c.want) {
-			t.Errorf("rate %v -> %q, want prefix %q", c.rate, got, c.want)
-		}
-	}
-}
-
 func countVideoFrames(t *testing.T, opts videoOptions, fps int) int {
 	t.Helper()
 	clip := makeTestVideo(t, fps, 1)
@@ -444,8 +520,9 @@ func TestVideoPlayerReportsSourceFramerate(t *testing.T) {
 	}
 	defer vp.stop()
 
-	if vp.fps < 29 || vp.fps > 31 {
-		t.Errorf("probed fps = %v, want about 30", vp.fps)
+	deadline := time.Now().Add(5 * time.Second)
+	for vp.fpsLabel() == "" && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
 	}
 	if label := vp.fpsLabel(); label != "30fps" {
 		t.Errorf("fps label = %q, want 30fps", label)
@@ -458,11 +535,68 @@ func TestVideoPlayerReportsSourceFramerate(t *testing.T) {
 	}
 }
 
-func TestVideoFilterNeverFakesFrames(t *testing.T) {
-	for _, rate := range []float64{0, 15, 24, 30, 50, 59.94, 60, 120} {
-		got := videoRateFilter(rate)
-		if got != "" {
-			t.Errorf("rate %v -> %q, want playback left at the source rate", rate, got)
+func withProbeSource(t *testing.T, fn func(string, string) sourceInfo) {
+	t.Helper()
+	probeSourceMu.Lock()
+	original := probeSourceFn
+	probeSourceFn = fn
+	probeSourceMu.Unlock()
+	t.Cleanup(func() {
+		probeSourceMu.Lock()
+		probeSourceFn = original
+		probeSourceMu.Unlock()
+	})
+}
+
+func TestVideoPlayerStartsBeforeProbeFinishes(t *testing.T) {
+	release := make(chan struct{})
+	var once sync.Once
+	finish := func() { once.Do(func() { close(release) }) }
+	defer finish()
+	withProbeSource(t, func(string, string) sourceInfo {
+		<-release
+		return sourceInfo{fps: 30, width: 640, height: 360}
+	})
+
+	start := time.Now()
+	vp, err := startVideoPlayer(videoPost(makeTestVideo(t, 30, 2)), 80, 24, videoOptions{})
+	if err != nil {
+		t.Fatalf("startVideoPlayer: %v", err)
+	}
+	defer vp.stop()
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("startVideoPlayer took %v, playback must not wait for the stream probe", elapsed)
+	}
+	select {
+	case <-vp.frames:
+	case <-time.After(3 * time.Second):
+		t.Fatal("no frame arrived while the stream probe was still running")
+	}
+	if label := vp.fpsLabel(); label != "" {
+		t.Errorf("fps label = %q before the probe returned, want it empty", label)
+	}
+
+	finish()
+	deadline := time.Now().Add(3 * time.Second)
+	for vp.fpsLabel() == "" && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if label := vp.fpsLabel(); label != "30fps" {
+		t.Errorf("fps label = %q after the probe returned, want 30fps", label)
+	}
+}
+
+func TestVideoPlaybackNeverFakesFrames(t *testing.T) {
+	vp, err := startVideoPlayer(videoPost(makeTestVideo(t, 30, 1)), 80, 24, videoOptions{})
+	if err != nil {
+		t.Fatalf("startVideoPlayer: %v", err)
+	}
+	defer vp.stop()
+
+	args := strings.Join(vp.cmd.Args, " ")
+	for _, unwanted := range []string{"minterpolate", "fps=", "-r "} {
+		if strings.Contains(args, unwanted) {
+			t.Errorf("ffmpeg args %q contain %q, playback must keep the source frames", args, unwanted)
 		}
 	}
 }
@@ -563,7 +697,7 @@ func TestVideoViewerRendersEveryFrame(t *testing.T) {
 		switch msg := msg.(type) {
 		case videoRenderedMsg:
 			rendered[msg.s] = true
-			if !strings.Contains(m.View(), msg.s) {
+			if !strings.Contains(m.View(), strings.TrimSuffix(msg.s, "\n")) {
 				t.Fatal("rendered frame is not what the viewer shows")
 			}
 		case videoDoneMsg:

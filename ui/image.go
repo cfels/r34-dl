@@ -10,6 +10,7 @@ import (
 	_ "image/jpeg"
 	"image/png"
 	"strings"
+	"sync"
 
 	"github.com/kenshaw/rasterm"
 	xdraw "golang.org/x/image/draw"
@@ -18,6 +19,20 @@ import (
 )
 
 const kittyChunkSize = 4096
+
+var kittyPNGBuffers = &encoderBufferPool{}
+
+type encoderBufferPool struct{ pool sync.Pool }
+
+func (p *encoderBufferPool) Get() *png.EncoderBuffer {
+	buf, _ := p.pool.Get().(*png.EncoderBuffer)
+	if buf == nil {
+		buf = &png.EncoderBuffer{}
+	}
+	return buf
+}
+
+func (p *encoderBufferPool) Put(buf *png.EncoderBuffer) { p.pool.Put(buf) }
 
 const (
 	maxImageBytes  = 24 << 20
@@ -74,8 +89,12 @@ func scaleToFit(img image.Image, termCols, termRows int) image.Image {
 }
 
 func encodeImage(img image.Image) (string, error) {
+	return encodeTermImage(img, png.BestSpeed, kittyTransmitPrefix, "")
+}
+
+func encodeTermImage(img image.Image, level png.CompressionLevel, header, tail string) (string, error) {
 	if rasterm.Kitty.Available() {
-		if s, err := encodeKittyImage(img); err == nil {
+		if s, err := encodeKittyImage(img, level, header, tail); err == nil {
 			return s, nil
 		}
 	}
@@ -87,30 +106,66 @@ func encodeImage(img image.Image) (string, error) {
 	return halfBlockEncode(img)
 }
 
-func encodeKittyImage(img image.Image) (string, error) {
-	var pngBuf bytes.Buffer
-	enc := png.Encoder{CompressionLevel: png.BestSpeed}
-	if err := enc.Encode(&pngBuf, img); err != nil {
+func encodeKittyImage(img image.Image, level png.CompressionLevel, header, tail string) (string, error) {
+	var out strings.Builder
+	out.Grow(kittyPayloadSize(img, len(header), len(tail)))
+	out.WriteString(header)
+	out.WriteString("\x1b\\")
+	chunks := &kittyChunkWriter{dst: &out, buf: make([]byte, kittyChunkSize)}
+	body := base64.NewEncoder(base64.StdEncoding, chunks)
+	enc := png.Encoder{CompressionLevel: level, BufferPool: kittyPNGBuffers}
+	if err := enc.Encode(body, img); err != nil {
 		return "", err
 	}
-	data := base64.StdEncoding.EncodeToString(pngBuf.Bytes())
-	var out strings.Builder
-	out.WriteString(kittyTransmitPrefix)
-	out.WriteString("\x1b\\")
-	for i := 0; i < len(data); i += kittyChunkSize {
-		end := i + kittyChunkSize
-		if end > len(data) {
-			end = len(data)
-		}
-		more := 1
-		if end == len(data) {
-			more = 0
-		}
-		fmt.Fprintf(&out, "\x1b_Gm=%d;%s\x1b\\", more, data[i:end])
+	if err := body.Close(); err != nil {
+		return "", err
 	}
+	chunks.close()
+	out.WriteString(tail)
 	out.WriteByte('\n')
 	return out.String(), nil
 }
+
+func kittyPayloadSize(img image.Image, headerLen, tailLen int) int {
+	b := img.Bounds()
+	raw := int64(b.Dx()) * int64(b.Dy()) * 4
+	if raw < 0 || raw > 1<<40 {
+		return 0
+	}
+	encoded := raw/3*4 + 8
+	escapes := encoded/kittyChunkSize + 1
+	return int(encoded + escapes*12 + int64(headerLen) + int64(tailLen) + 2)
+}
+
+type kittyChunkWriter struct {
+	dst *strings.Builder
+	buf []byte
+	n   int
+}
+
+func (w *kittyChunkWriter) Write(p []byte) (int, error) {
+	written := len(p)
+	for len(p) > 0 {
+		if w.n == len(w.buf) {
+			w.flush(1)
+		}
+		copied := copy(w.buf[w.n:], p)
+		w.n += copied
+		p = p[copied:]
+	}
+	return written, nil
+}
+
+func (w *kittyChunkWriter) flush(more byte) {
+	w.dst.WriteString("\x1b_Gm=")
+	w.dst.WriteByte('0' + more)
+	w.dst.WriteByte(';')
+	w.dst.Write(w.buf[:w.n])
+	w.dst.WriteString("\x1b\\")
+	w.n = 0
+}
+
+func (w *kittyChunkWriter) close() { w.flush(0) }
 
 func halfBlockEncode(img image.Image) (string, error) {
 	b := img.Bounds()

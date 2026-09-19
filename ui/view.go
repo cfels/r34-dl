@@ -313,11 +313,11 @@ func (m Model) View() string {
 			line += "  " + fps
 		}
 		line += fmt.Sprintf("  %s  ·  m: toggle audio  ·  any key: stop", audio)
-		status := "\n" + dimStyle.Render(line)
+		status := dimStyle.Render(line)
 		if m.videoFrame != "" {
-			return m.videoFrame + status
+			return videoFrameView(m.videoFrame, status)
 		}
-		return status
+		return "\n" + status
 
 	case stateViewer:
 		if m.viewerErr != "" {

@@ -117,10 +117,14 @@ func sanitizedTestEnv() []string {
 		if strings.HasPrefix(entry, "GOFLAGS=") ||
 			strings.HasPrefix(entry, "GOEXPERIMENT=") ||
 			strings.HasPrefix(entry, "GOENV=") ||
-			strings.HasPrefix(entry, "GOTOOLCHAIN=") {
+			strings.HasPrefix(entry, "GOTOOLCHAIN=") ||
+			strings.HasPrefix(entry, "XDG_CONFIG_HOME=") {
 			continue
 		}
 		out = append(out, entry)
+	}
+	if dir, err := os.MkdirTemp("", "r34-dl-testcfg"); err == nil {
+		out = append(out, "XDG_CONFIG_HOME="+dir)
 	}
 	out = append(out, "GOENV=off", "GOTOOLCHAIN=local")
 	return out
