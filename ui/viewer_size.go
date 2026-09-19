@@ -4,7 +4,7 @@ import "math"
 
 const (
 	cellW = 8
-	cellH = 16
+	cellH = 21
 )
 
 const (
