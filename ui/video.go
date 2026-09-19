@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	videoMaxFPS    = 60
+	videoMaxFPS    = 120
 	videoUserAgent = "r34-dl/viewer"
 )
 
@@ -55,6 +55,7 @@ type videoPlayer struct {
 
 	width   int
 	height  int
+	fps     float64
 	source  string
 	headers string
 
@@ -76,8 +77,7 @@ type videoPlayer struct {
 }
 
 type videoOptions struct {
-	audio  bool
-	smooth *bool
+	audio bool
 }
 
 func videoFitSize(termCols, termRows, srcW, srcH int) (int, int) {
@@ -107,19 +107,11 @@ func videoFitSize(termCols, termRows, srcW, srcH int) (int, int) {
 	return w, h
 }
 
-func videoRateFilter(rate float64, smooth *bool) string {
-	switch {
-	case rate > videoMaxFPS:
+func videoRateFilter(rate float64) string {
+	if rate > videoMaxFPS {
 		return fmt.Sprintf("fps=%d", videoMaxFPS)
-	case smooth != nil && !*smooth:
-		return ""
-	case rate == 0:
-		return fmt.Sprintf("fps=%d", videoMaxFPS)
-	case rate >= videoMaxFPS-1:
-		return ""
-	default:
-		return fmt.Sprintf("minterpolate=fps=%d:mi_mode=mci:mc_mode=aobmc", videoMaxFPS)
 	}
+	return ""
 }
 
 func streamHeaders(stream api.Stream) string {
@@ -143,7 +135,8 @@ func startVideoPlayer(post api.Post, termCols, termRows int, opts videoOptions) 
 
 func startStreamPlayer(stream api.Stream, post api.Post, termCols, termRows int, opts videoOptions) (*videoPlayer, error) {
 	rawURL := stream.URL
-	info := probeSource(rawURL)
+	headers := streamHeaders(stream)
+	info := probeSource(rawURL, headers)
 	srcW, srcH := post.Width, post.Height
 	if info.width > 0 && info.height > 0 {
 		srcW, srcH = info.width, info.height
@@ -155,7 +148,7 @@ func startStreamPlayer(stream api.Stream, post api.Post, termCols, termRows int,
 		w, h, w, h,
 	)
 	parts := []string{scale}
-	if rate := videoRateFilter(info.fps, opts.smooth); rate != "" {
+	if rate := videoRateFilter(info.fps); rate != "" {
 		parts = append(parts, rate)
 	}
 	parts = append(parts, "setsar=1", "format=rgba")
@@ -168,7 +161,7 @@ func startStreamPlayer(stream api.Stream, post api.Post, termCols, termRows int,
 	)
 	if isHTTP(rawURL) {
 		cmd.Args = append(cmd.Args, "-user_agent", videoUserAgent)
-		if headers := streamHeaders(stream); headers != "" {
+		if headers != "" {
 			cmd.Args = append(cmd.Args, "-headers", headers)
 		}
 	}
@@ -187,8 +180,9 @@ func startStreamPlayer(stream api.Stream, post api.Post, termCols, termRows int,
 		cmd:     cmd,
 		width:   w,
 		height:  h,
+		fps:     info.fps,
 		source:  rawURL,
-		headers: streamHeaders(stream),
+		headers: headers,
 		muted:   !opts.audio,
 		frames:  make(chan image.Image, 1),
 		done:    make(chan struct{}),
@@ -209,6 +203,16 @@ func startStreamPlayer(stream api.Stream, post api.Post, termCols, termRows int,
 	return vp, nil
 }
 
+func (vp *videoPlayer) fpsLabel() string {
+	if vp == nil || vp.fps <= 0 {
+		return ""
+	}
+	if math.Abs(vp.fps-math.Round(vp.fps)) < 0.01 {
+		return fmt.Sprintf("%.0ffps", vp.fps)
+	}
+	return fmt.Sprintf("%.2ffps", vp.fps)
+}
+
 func isHTTP(rawURL string) bool {
 	return strings.HasPrefix(rawURL, "http://") || strings.HasPrefix(rawURL, "https://")
 }
@@ -219,7 +223,7 @@ type sourceInfo struct {
 	height int
 }
 
-func probeSource(rawURL string) sourceInfo {
+func probeSource(rawURL, headers string) sourceInfo {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	args := []string{
@@ -230,6 +234,9 @@ func probeSource(rawURL string) sourceInfo {
 	}
 	if isHTTP(rawURL) {
 		args = append(args, "-user_agent", videoUserAgent)
+		if headers != "" {
+			args = append(args, "-headers", headers)
+		}
 	}
 	args = append(args, rawURL)
 	out, err := exec.CommandContext(ctx, "ffprobe", args...).Output()
@@ -241,7 +248,7 @@ func probeSource(rawURL string) sourceInfo {
 
 func parseSourceInfo(out string) sourceInfo {
 	info := sourceInfo{}
-	rates := make([]float64, 0, 2)
+	var avg, nominal float64
 	for _, line := range strings.Split(out, "\n") {
 		key, value, ok := strings.Cut(strings.TrimSpace(line), "=")
 		if !ok {
@@ -256,22 +263,21 @@ func parseSourceInfo(out string) sourceInfo {
 			if n, err := strconv.Atoi(value); err == nil {
 				info.height = n
 			}
-		case "avg_frame_rate", "r_frame_rate":
+		case "avg_frame_rate":
 			if rate, ok := parseRate(value); ok {
-				rates = append(rates, rate)
+				avg = rate
+			}
+		case "r_frame_rate":
+			if rate, ok := parseRate(value); ok {
+				nominal = rate
 			}
 		}
 	}
-	if len(rates) == 0 {
-		return info
+	if avg > 0 {
+		info.fps = avg
+	} else {
+		info.fps = nominal
 	}
-	lowest := rates[0]
-	for _, rate := range rates[1:] {
-		if rate < lowest {
-			lowest = rate
-		}
-	}
-	info.fps = lowest
 	return info
 }
 

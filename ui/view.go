@@ -290,10 +290,12 @@ func (m Model) View() string {
 		if m.video == nil || m.video.isMuted() {
 			audio = "audio: off"
 		}
-		status := "\n" + dimStyle.Render(fmt.Sprintf(
-			"▶ #%d  %s  %s  ·  m: toggle audio  ·  any key: stop",
-			m.viewerPost.ID, postSize(m.viewerPost), audio,
-		))
+		line := fmt.Sprintf("▶ #%d  %s", m.viewerPost.ID, postSize(m.viewerPost))
+		if fps := m.video.fpsLabel(); fps != "" {
+			line += "  " + fps
+		}
+		line += fmt.Sprintf("  %s  ·  m: toggle audio  ·  any key: stop", audio)
+		status := "\n" + dimStyle.Render(line)
 		if m.videoFrame != "" {
 			return m.videoFrame + status
 		}

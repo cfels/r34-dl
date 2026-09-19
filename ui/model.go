@@ -91,8 +91,6 @@ type Model struct {
 
 func (m Model) Cfg() conf.Config { return m.cfg }
 
-func (m Model) smoothVideos() *bool { return m.cfg.Interpolate }
-
 func (m Model) apiTags() string {
 	tags := strings.TrimSpace(m.query)
 	if !m.aiFilterOn() {

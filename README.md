@@ -24,6 +24,8 @@ a rule34/safebooru downloader with alot of feature's, Why? cuz i didn't saw any 
 
 video playback and video downloads use `ffmpeg`, so make sure it's installed
 
+video previews play at the source frame rate (capped at 120fps for sanity)
+
 ### Donwloading
 you can download pre-built binary from [Release's](https://github.com/cfels/r34-dl/releases)
 
@@ -51,8 +53,6 @@ Options:
   --no-audio                       mute video audio
   --filter-ai                      hide AI generated posts
   --no-filter-ai                   show AI generated posts
-  --interpolate                    smooth videos below 60fps to 60fps (default: on)
-  --no-interpolate                 play videos at their own frame rate
   --run-tests                      run tests
 ```
 

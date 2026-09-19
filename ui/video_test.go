@@ -105,15 +105,15 @@ func TestVideoPlayerStreamsFrames(t *testing.T) {
 	}
 }
 
-func TestVideoPlayerCapsFramerateAt60(t *testing.T) {
+func TestVideoPlayerUsesSourceFramerateUpTo120(t *testing.T) {
 	const seconds = 2
 
 	frames, elapsed := playClip(t, makeTestVideo(t, 120, seconds))
-	if max := 60*seconds + 20; frames > max {
+	if max := 120*seconds + 30; frames > max {
 		t.Errorf("120fps source streamed %d frames, want at most %d", frames, max)
 	}
-	if frames < 30 {
-		t.Errorf("only %d frames in %v, playback is stalling", frames, elapsed)
+	if min := 100*seconds - 30; frames < min {
+		t.Errorf("120fps source streamed %d frames in %v, want at least %d", frames, elapsed, min)
 	}
 	if elapsed < time.Second || elapsed > 8*time.Second {
 		t.Errorf("2s clip played in %v, playback is not paced in realtime", elapsed)
@@ -304,26 +304,32 @@ func TestParseSourceInfo(t *testing.T) {
 	if empty := parseSourceInfo(""); empty.width != 0 || empty.fps != 0 {
 		t.Errorf("empty probe = %+v, want zeroes", empty)
 	}
+	avg := parseSourceInfo("avg_frame_rate=60/1\nr_frame_rate=120/1\n")
+	if avg.fps != 60 {
+		t.Errorf("avg fps = %v, want 60", avg.fps)
+	}
+	fallback := parseSourceInfo("avg_frame_rate=0/0\nr_frame_rate=120/1\n")
+	if fallback.fps != 120 {
+		t.Errorf("fallback fps = %v, want 120", fallback.fps)
+	}
 }
 
 func TestVideoRateFilter(t *testing.T) {
-	on, off := true, false
 	cases := []struct {
-		rate   float64
-		smooth *bool
-		want   string
+		rate float64
+		want string
 	}{
-		{rate: 120, want: "fps=60"},
+		{rate: 120, want: ""},
+		{rate: 121, want: "fps=120"},
+		{rate: 240, want: "fps=120"},
 		{rate: 60, want: ""},
 		{rate: 59.94, want: ""},
-		{rate: 30, want: "minterpolate="},
-		{rate: 24, want: "minterpolate="},
-		{rate: 30, smooth: &on, want: "minterpolate="},
-		{rate: 30, smooth: &off, want: ""},
-		{rate: 0, want: "fps=60"},
+		{rate: 30, want: ""},
+		{rate: 24, want: ""},
+		{rate: 0, want: ""},
 	}
 	for _, c := range cases {
-		got := videoRateFilter(c.rate, c.smooth)
+		got := videoRateFilter(c.rate)
 		if c.want == "" && got != "" {
 			t.Errorf("rate %v -> %q, want none", c.rate, got)
 			continue
@@ -334,9 +340,9 @@ func TestVideoRateFilter(t *testing.T) {
 	}
 }
 
-func countVideoFrames(t *testing.T, opts videoOptions) int {
+func countVideoFrames(t *testing.T, opts videoOptions, fps int) int {
 	t.Helper()
-	clip := makeTestVideo(t, 30, 1)
+	clip := makeTestVideo(t, fps, 1)
 	vp, err := startVideoPlayer(videoPost(clip), 80, 24, opts)
 	if err != nil {
 		t.Fatalf("startVideoPlayer: %v", err)
@@ -358,16 +364,43 @@ func countVideoFrames(t *testing.T, opts videoOptions) int {
 	}
 }
 
-func TestVideoIsSmoothByDefault(t *testing.T) {
-	if frames := countVideoFrames(t, videoOptions{}); frames < 45 {
-		t.Errorf("a 30fps clip produced %d frames by default, want it smoothed to about 60", frames)
+func TestVideoPlaysAtSourceFramerate(t *testing.T) {
+	for _, fps := range []int{24, 30, 60} {
+		frames := countVideoFrames(t, videoOptions{}, fps)
+		low, high := fps*3/4, fps*5/4+2
+		if frames < low || frames > high {
+			t.Errorf("a %dfps one second clip produced %d frames, want between %d and %d", fps, frames, low, high)
+		}
 	}
 }
 
-func TestVideoInterpolationCanBeDisabled(t *testing.T) {
-	off := false
-	if frames := countVideoFrames(t, videoOptions{smooth: &off}); frames > 40 {
-		t.Errorf("a 30fps clip produced %d frames with interpolation off, want about 30", frames)
+func TestVideoPlayerReportsSourceFramerate(t *testing.T) {
+	vp, err := startVideoPlayer(videoPost(makeTestVideo(t, 30, 1)), 80, 24, videoOptions{})
+	if err != nil {
+		t.Fatalf("startVideoPlayer: %v", err)
+	}
+	defer vp.stop()
+
+	if vp.fps < 29 || vp.fps > 31 {
+		t.Errorf("probed fps = %v, want about 30", vp.fps)
+	}
+	if label := vp.fpsLabel(); label != "30fps" {
+		t.Errorf("fps label = %q, want 30fps", label)
+	}
+	if label := (&videoPlayer{fps: 29.97}).fpsLabel(); label != "29.97fps" {
+		t.Errorf("29.97 fps label = %q, want 29.97fps", label)
+	}
+	if label := (&videoPlayer{}).fpsLabel(); label != "" {
+		t.Errorf("unknown fps label = %q, want empty", label)
+	}
+}
+
+func TestVideoFilterNeverFakesFrames(t *testing.T) {
+	for _, rate := range []float64{0, 15, 24, 30, 50, 59.94, 60, 120} {
+		got := videoRateFilter(rate)
+		if got != "" {
+			t.Errorf("rate %v -> %q, want playback left at the source rate", rate, got)
+		}
 	}
 }
 

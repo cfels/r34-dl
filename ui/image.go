@@ -2,12 +2,13 @@ package ui
 
 import (
 	"bytes"
+	"encoding/base64"
 	"fmt"
 	"image"
 	"image/draw"
 	_ "image/gif"
 	_ "image/jpeg"
-	_ "image/png"
+	"image/png"
 	"strings"
 
 	"github.com/kenshaw/rasterm"
@@ -15,6 +16,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+const kittyChunkSize = 4096
 
 func scaleToFit(img image.Image, termCols, termRows int) image.Image {
 	maxPxW := termCols * cellW
@@ -47,12 +50,42 @@ func scaleToFit(img image.Image, termCols, termRows int) image.Image {
 }
 
 func encodeImage(img image.Image) (string, error) {
+	if rasterm.Kitty.Available() {
+		if s, err := encodeKittyImage(img); err == nil {
+			return s, nil
+		}
+	}
 	var buf strings.Builder
 	err := rasterm.Encode(&buf, img)
 	if err == nil {
 		return buf.String(), nil
 	}
 	return halfBlockEncode(img)
+}
+
+func encodeKittyImage(img image.Image) (string, error) {
+	var pngBuf bytes.Buffer
+	enc := png.Encoder{CompressionLevel: png.BestSpeed}
+	if err := enc.Encode(&pngBuf, img); err != nil {
+		return "", err
+	}
+	data := base64.StdEncoding.EncodeToString(pngBuf.Bytes())
+	var out strings.Builder
+	out.WriteString(kittyTransmitPrefix)
+	out.WriteString("\x1b\\")
+	for i := 0; i < len(data); i += kittyChunkSize {
+		end := i + kittyChunkSize
+		if end > len(data) {
+			end = len(data)
+		}
+		more := 1
+		if end == len(data) {
+			more = 0
+		}
+		fmt.Fprintf(&out, "\x1b_Gm=%d;%s\x1b\\", more, data[i:end])
+	}
+	out.WriteByte('\n')
+	return out.String(), nil
 }
 
 func halfBlockEncode(img image.Image) (string, error) {

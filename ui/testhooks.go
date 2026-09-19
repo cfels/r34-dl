@@ -47,9 +47,7 @@ func VideoFitSize(termCols, termRows, srcW, srcH int) (int, int) {
 	return videoFitSize(termCols, termRows, srcW, srcH)
 }
 
-func VideoRateFilter(rate float64, smooth *bool) string {
-	return videoRateFilter(rate, smooth)
-}
+func VideoRateFilter(rate float64) string { return videoRateFilter(rate) }
 
 func AudioFilterArgs() []string { return audioFilterArgs() }
 
