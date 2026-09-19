@@ -59,6 +59,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			case tea.KeyCtrlC, tea.KeyEsc:
+				if msg.Type == tea.KeyEsc && m.suggestPick {
+					m.suggestPick = false
+					m.suggestIdx = 0
+					return m, nil
+				}
 				m.clearSuggestions()
 				return m, tea.Quit
 			case tea.KeyEnter:
@@ -77,8 +82,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			case tea.KeyUp:
 				if m.suggestPick {
-					m.suggestPick = false
-					m.suggestIdx = 0
+					if m.suggestIdx == 0 {
+						m.suggestPick = false
+						return m, nil
+					}
+					m.cycleSuggestion(-1)
 					return m, nil
 				}
 				m.suggestPick = false
@@ -89,6 +97,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, m.refreshSuggestions()
 			case tea.KeyDown:
+				if m.pickSuggestion(1) {
+					return m, nil
+				}
 				m.suggestPick = false
 				if m.historyIdx < len(m.history)-1 {
 					m.historyIdx++
@@ -146,6 +157,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, m.refreshSuggestions()
 			case tea.KeyRight:
+				if m.inputCursor >= len([]rune(m.query)) && m.acceptGhost() {
+					return m, nil
+				}
 				if m.inputCursor < len([]rune(m.query)) {
 					m.inputCursor++
 				}
@@ -165,6 +179,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.inputCursor++
 				return m, m.refreshSuggestions()
 			case tea.KeyTab:
+				if m.canAcceptSuggestion() && m.acceptSuggestion() {
+					return m, nil
+				}
 				m.cycleAPI(1)
 				return m, m.refreshSuggestions()
 			case tea.KeyShiftTab:

@@ -3,6 +3,7 @@ package api
 import (
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"io"
@@ -14,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -149,6 +151,65 @@ func siteGetRef(client *http.Client, rawURL, referer string) ([]byte, error) {
 	return body, nil
 }
 
+func siteGetJSON(client *http.Client, rawURL, referer string) ([]byte, int, error) {
+	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, 0, fmt.Errorf("couldn't build request: %w", err)
+	}
+	req.Header.Set("User-Agent", browserUserAgent)
+	req.Header.Set("Accept", "application/json, text/plain, */*")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	req.Header.Set("X-Requested-With", "XMLHttpRequest")
+	if referer != "" {
+		req.Header.Set("Referer", referer)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, 0, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxSiteBody))
+	if err != nil {
+		return nil, resp.StatusCode, fmt.Errorf("couldn't read response: %w", err)
+	}
+	return body, resp.StatusCode, nil
+}
+
+func jsonObjectAt(page string, start int) string {
+	if start < 0 || start >= len(page) || page[start] != '{' {
+		return ""
+	}
+	depth := 0
+	inString := false
+	escaped := false
+	for i := start; i < len(page); i++ {
+		ch := page[i]
+		if inString {
+			switch {
+			case escaped:
+				escaped = false
+			case ch == '\\':
+				escaped = true
+			case ch == '"':
+				inString = false
+			}
+			continue
+		}
+		switch ch {
+		case '"':
+			inString = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return page[start : i+1]
+			}
+		}
+	}
+	return ""
+}
+
 func cookieHeader(jar http.CookieJar, rawURL string) string {
 	if jar == nil {
 		return ""
@@ -205,11 +266,88 @@ func mediaClient() *http.Client {
 
 type PornHubClient struct {
 	http *http.Client
+
+	sessionMu sync.Mutex
+	session   *http.Client
+	token     string
 }
 
 func (c *PornHubClient) Name() string { return "pornhub" }
 
-func (c *PornHubClient) Autocomplete(prefix string) ([]string, error) { return nil, nil }
+var (
+	phTokenRe          = regexp.MustCompile(`data-token="([^"]+)"`)
+	errPornHubBadToken = errors.New("pornhub rejected the search token")
+)
+
+func (c *PornHubClient) Autocomplete(prefix string) ([]string, error) {
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		return nil, nil
+	}
+	c.sessionMu.Lock()
+	defer c.sessionMu.Unlock()
+	if c.session == nil {
+		c.session = mediaClient()
+	}
+	if c.token == "" {
+		token, err := c.refreshToken(prefix)
+		if err != nil {
+			return nil, err
+		}
+		c.token = token
+	}
+	candidates, err := c.suggest(prefix, c.token)
+	if errors.Is(err, errPornHubBadToken) {
+		token, refreshErr := c.refreshToken(prefix)
+		if refreshErr != nil {
+			c.token = ""
+			return nil, refreshErr
+		}
+		c.token = token
+		candidates, err = c.suggest(prefix, token)
+	}
+	if err != nil {
+		c.token = ""
+		return nil, err
+	}
+	return matchPredictions(candidates, prefix, maxPredictions), nil
+}
+
+func (c *PornHubClient) refreshToken(prefix string) (string, error) {
+	body, err := siteGet(c.session, c.searchURL(prefix, 0))
+	if err != nil {
+		return "", err
+	}
+	token := firstMatch(phTokenRe, string(body))
+	if token == "" {
+		return "", fmt.Errorf("pornhub did not expose a search token")
+	}
+	return token, nil
+}
+
+func (c *PornHubClient) suggest(prefix, token string) ([]string, error) {
+	q := url.Values{}
+	q.Set("q", prefix)
+	q.Set("alt", "0")
+	q.Set("pornstars", "1")
+	q.Set("token", token)
+	body, status, err := siteGetJSON(
+		c.session,
+		"https://www.pornhub.com/api/v1/video/search_autocomplete?"+q.Encode(),
+		c.searchURL(prefix, 0),
+	)
+	if err != nil {
+		return nil, err
+	}
+	switch status {
+	case http.StatusOK:
+	case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden:
+		return nil, errPornHubBadToken
+	default:
+		return nil, fmt.Errorf("pornhub autocomplete returned %s", http.StatusText(status))
+	}
+	return suggestionFields(body), nil
+}
 
 func (c *PornHubClient) searchURL(query string, page int) string {
 	q := url.Values{}
@@ -485,11 +623,67 @@ func segmentReachable(client *http.Client, segmentURL, referer string) bool {
 
 type XVideosClient struct {
 	http *http.Client
+
+	tagsMu  sync.Mutex
+	tags    []string
+	fetched time.Time
 }
 
 func (c *XVideosClient) Name() string { return "xvideos" }
 
-func (c *XVideosClient) Autocomplete(prefix string) ([]string, error) { return nil, nil }
+const xvideosTagTTL = 30 * time.Minute
+
+var xvTagLinkRe = regexp.MustCompile(`href="/tags/([a-z0-9-]+)"`)
+
+func (c *XVideosClient) Autocomplete(prefix string) ([]string, error) {
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		return nil, nil
+	}
+	tags, err := c.tagIndex()
+	if err != nil {
+		return nil, err
+	}
+	return matchPredictions(tags, prefix, maxPredictions), nil
+}
+
+func (c *XVideosClient) tagIndex() ([]string, error) {
+	c.tagsMu.Lock()
+	defer c.tagsMu.Unlock()
+	if len(c.tags) > 0 && time.Since(c.fetched) < xvideosTagTTL {
+		return c.tags, nil
+	}
+	body, err := siteGet(c.http, "https://www.xvideos.com/tags")
+	if err != nil {
+		return nil, err
+	}
+	tags := parseXVideosTags(body)
+	if len(tags) == 0 {
+		return nil, fmt.Errorf("xvideos listed no tags")
+	}
+	c.tags, c.fetched = tags, time.Now()
+	return tags, nil
+}
+
+func parseXVideosTags(body []byte) []string {
+	matches := xvTagLinkRe.FindAllStringSubmatch(string(body), -1)
+	tags := make([]string, 0, len(matches))
+	seen := make(map[string]bool, len(matches))
+	for _, match := range matches {
+		slug := strings.Trim(match[1], "-")
+		if slug == "" {
+			continue
+		}
+		name := strings.Join(strings.Fields(strings.ReplaceAll(slug, "-", " ")), " ")
+		key := strings.ToLower(name)
+		if name == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		tags = append(tags, name)
+	}
+	return tags
+}
 
 func (c *XVideosClient) searchURL(query string, page int) string {
 	q := url.Values{}
@@ -586,11 +780,82 @@ func xvideosStreamURL(page string) string {
 
 type XHamsterClient struct {
 	http *http.Client
+
+	cacheMu sync.Mutex
+	cache   map[string][]string
 }
 
 func (c *XHamsterClient) Name() string { return "xhamster" }
 
-func (c *XHamsterClient) Autocomplete(prefix string) ([]string, error) { return nil, nil }
+const xhSuggestionKey = `"searchVideoSuggestions":`
+
+type xhSuggestion struct {
+	Text      string `json:"text"`
+	PlainText string `json:"plainText"`
+}
+
+func (c *XHamsterClient) Autocomplete(prefix string) ([]string, error) {
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		return nil, nil
+	}
+	key := strings.ToLower(prefix)
+	if cached, ok := c.cachedSuggestions(key); ok {
+		return cached, nil
+	}
+	body, err := siteGet(c.http, c.searchURL(prefix, 0))
+	if err != nil {
+		return nil, err
+	}
+	tags := matchPredictions(parseXHamsterSuggestions(body), prefix, maxPredictions)
+	c.storeSuggestions(key, tags)
+	return tags, nil
+}
+
+func (c *XHamsterClient) cachedSuggestions(key string) ([]string, bool) {
+	c.cacheMu.Lock()
+	defer c.cacheMu.Unlock()
+	tags, ok := c.cache[key]
+	return tags, ok
+}
+
+func (c *XHamsterClient) storeSuggestions(key string, tags []string) {
+	c.cacheMu.Lock()
+	defer c.cacheMu.Unlock()
+	if c.cache == nil || len(c.cache) > 128 {
+		c.cache = make(map[string][]string)
+	}
+	c.cache[key] = tags
+}
+
+func parseXHamsterSuggestions(body []byte) []string {
+	page := string(body)
+	start := strings.Index(page, xhSuggestionKey)
+	if start < 0 {
+		return nil
+	}
+	raw := jsonObjectAt(page, start+len(xhSuggestionKey))
+	if raw == "" {
+		return nil
+	}
+	var payload struct {
+		Tags []xhSuggestion `json:"tags"`
+	}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return nil
+	}
+	tags := make([]string, 0, len(payload.Tags))
+	for _, tag := range payload.Tags {
+		text := strings.TrimSpace(tag.Text)
+		if text == "" {
+			text = strings.TrimSpace(tag.PlainText)
+		}
+		if text != "" {
+			tags = append(tags, html.UnescapeString(text))
+		}
+	}
+	return tags
+}
 
 func (c *XHamsterClient) searchURL(query string, page int) string {
 	base := "https://xhamster.com/search/"

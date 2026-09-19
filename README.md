@@ -14,13 +14,13 @@ a rule34/safebooru downloader with alot of feature's, Why? cuz i didn't saw any 
 
 ### Sites
 
-| site | search | download |
-| ---- | ------ | -------- |
-| safebooru | yes | image/gif/vids |
-| rule34 | needs an API key | image/gif/vids |
-| pornhub | yes | video (mp4) |
-| xvideos | yes | video (mp4) |
-| xhamster | yes | video (mp4) |
+| site | search | predictions | download |
+| ---- | ------ | ----------- | -------- |
+| safebooru | yes | yes | image/gif/vids |
+| rule34 | needs an API key | yes | image/gif/vids |
+| pornhub | yes | yes | video (mp4) |
+| xvideos | yes | yes | video (mp4) |
+| xhamster | yes | yes | video (mp4) |
 
 video playback and video downloads use `ffmpeg`, so make sure it's installed
 

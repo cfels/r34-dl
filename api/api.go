@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -180,6 +181,95 @@ func stripTagCount(label string) string {
 		}
 	}
 	return strings.TrimSpace(label[:open])
+}
+
+const maxPredictions = 8
+
+func matchPredictions(candidates []string, prefix string, max int) []string {
+	prefix = strings.ToLower(strings.TrimSpace(prefix))
+	if prefix == "" || max <= 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(candidates))
+	out := make([]string, 0, max)
+	for _, candidate := range candidates {
+		candidate = strings.Join(strings.Fields(strings.TrimSpace(candidate)), " ")
+		key := strings.ToLower(candidate)
+		if candidate == "" || seen[key] {
+			continue
+		}
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		seen[key] = true
+		out = append(out, candidate)
+		if len(out) == max {
+			break
+		}
+	}
+	return out
+}
+
+func suggestionFields(body []byte) []string {
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil
+	}
+	ordered := make([]string, 0, len(payload))
+	for key := range payload {
+		if _, err := strconv.Atoi(key); err == nil {
+			ordered = append(ordered, key)
+		}
+	}
+	sort.Slice(ordered, func(i, j int) bool {
+		left, _ := strconv.Atoi(ordered[i])
+		right, _ := strconv.Atoi(ordered[j])
+		return left < right
+	})
+	out := make([]string, 0, len(ordered))
+	for _, key := range ordered {
+		var value string
+		if err := json.Unmarshal(payload[key], &value); err == nil {
+			out = append(out, value)
+		}
+	}
+	rest := make([]string, 0, len(payload))
+	for key := range payload {
+		if _, err := strconv.Atoi(key); err == nil {
+			continue
+		}
+		rest = append(rest, key)
+	}
+	sort.Strings(rest)
+	for _, key := range rest {
+		out = append(out, rawStrings(payload[key])...)
+	}
+	return out
+}
+
+func rawStrings(raw json.RawMessage) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	var list []string
+	if err := json.Unmarshal(raw, &list); err == nil {
+		return list
+	}
+	var objects []map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &objects); err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(objects))
+	for _, object := range objects {
+		for _, field := range []string{"value", "name", "text", "title", "username"} {
+			var value string
+			if err := json.Unmarshal(object[field], &value); err == nil && value != "" {
+				out = append(out, value)
+				break
+			}
+		}
+	}
+	return out
 }
 
 type SafebooruClient struct {

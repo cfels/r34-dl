@@ -222,7 +222,7 @@ func (m Model) View() string {
 			if len(tags) > 1 {
 				line += dimStyle.Render(" · " + strings.Join(tags[1:], " · "))
 			}
-			s += dimStyle.Render("   Y → ") + line + "\n"
+			s += dimStyle.Render("   tab/Y → ") + line + "\n"
 		}
 		if m.cfg.ActiveAPI == "rule34" {
 			s += switchLine(m.cfg.FilterAI) + "\n"
@@ -235,9 +235,12 @@ func (m Model) View() string {
 		if m.err != "" {
 			s += errorStyle.Render(m.err) + "\n\n"
 		}
-		hint := "tab: switch site · shift+tab: back · enter: search · shift+↓/→/←: pick tag · enter: accept · ↑: back"
+		hint := "tab: switch site · shift+tab: back · enter: search · ↑/↓: history"
+		if len(m.suggestions) > 0 {
+			hint = "↓: pick tag · tab/Y: accept · →: complete · enter: search · ↑: history"
+		}
 		if m.suggestPick {
-			hint = "enter: accept picked tag · shift+↓/→/←: move · ↑: back to typing"
+			hint = "↑/↓: move · tab/Y/enter: accept · esc: back to typing"
 		}
 		s += dimStyle.Render(hint)
 		return s

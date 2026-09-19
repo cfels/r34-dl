@@ -45,6 +45,29 @@ func TestLiveSiteSearchAndStreams(t *testing.T) {
 	}
 }
 
+func TestLiveSitePredictions(t *testing.T) {
+	if os.Getenv("R34_LIVE") == "" {
+		t.Skip("set R34_LIVE=1 to run")
+	}
+	for _, client := range liveClients() {
+		tags, err := client.Autocomplete("big")
+		if err != nil {
+			t.Errorf("%s predictions: %v", client.Name(), err)
+			continue
+		}
+		if len(tags) == 0 {
+			t.Errorf("%s returned no predictions", client.Name())
+			continue
+		}
+		for _, tag := range tags {
+			if !strings.HasPrefix(strings.ToLower(tag), "big") {
+				t.Errorf("%s suggested %q for prefix big", client.Name(), tag)
+			}
+		}
+		t.Logf("%s: %v", client.Name(), tags)
+	}
+}
+
 func probeStream(stream Stream) error {
 	var headers strings.Builder
 	if stream.Cookie != "" {

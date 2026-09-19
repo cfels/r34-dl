@@ -48,6 +48,9 @@ func doAutocomplete(client api.Client, word string, local []string, gen int) tea
 			if !strings.HasPrefix(strings.ToLower(tag), strings.ToLower(word)) {
 				continue
 			}
+			if strings.EqualFold(tag, word) {
+				continue
+			}
 			seen[tag] = true
 			merged = append(merged, tag)
 			if len(merged) == maxSuggests {
@@ -83,7 +86,7 @@ func (m *Model) localSuggestions(word string) []string {
 	lower := strings.ToLower(word)
 	add := func(tag string) {
 		tag = strings.TrimSpace(tag)
-		if tag == "" || !strings.HasPrefix(strings.ToLower(tag), lower) {
+		if tag == "" || !strings.HasPrefix(strings.ToLower(tag), lower) || strings.EqualFold(tag, word) {
 			return
 		}
 		tags = append(tags, tag)
@@ -202,6 +205,20 @@ func (m *Model) ghostSuggestion() string {
 		return ""
 	}
 	return string(topRunes[len(wordRunes):])
+}
+
+func (m *Model) canAcceptSuggestion() bool {
+	if len(m.suggestions) == 0 || m.suggestWord == "" {
+		return false
+	}
+	return !strings.EqualFold(m.suggestionAt(m.suggestIdx), m.suggestWord)
+}
+
+func (m *Model) acceptGhost() bool {
+	if m.ghostSuggestion() == "" {
+		return false
+	}
+	return m.acceptSuggestion()
 }
 
 func (m *Model) acceptSuggestion() bool {

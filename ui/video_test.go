@@ -216,30 +216,50 @@ func TestVideoFrameSwapsKittyImage(t *testing.T) {
 }
 
 func TestVideoFitHasNoLetterbox(t *testing.T) {
+	cols, rows := videoBox(80, 24)
+	boxW, boxH := cols*cellW, rows*cellH
 	w, h := videoFitSize(80, 24, 640, 360)
-	if w > previewCols(80)*cellW || h > previewRows(24)*cellH {
-		t.Errorf("fit %dx%d exceeds the preview box", w, h)
+	if w > boxW || h > boxH {
+		t.Errorf("fit %dx%d exceeds the preview box %dx%d", w, h, boxW, boxH)
 	}
-	if diff := w*360 - h*640; diff > 640 || diff < -640 {
+	if w != boxW && h != boxH {
+		t.Errorf("fit %dx%d should fill the preview box %dx%d", w, h, boxW, boxH)
+	}
+	if ratio := float64(w) / float64(h); ratio < 1.75 || ratio > 1.81 {
 		t.Errorf("fit %dx%d distorts the 640x360 aspect", w, h)
-	}
-	if h != previewRows(24)*cellH {
-		t.Errorf("wide 640x360 source should fill the box height, got %d", h)
 	}
 
 	w, h = videoFitSize(80, 24, 0, 0)
-	boxW, boxH := previewCols(80)*cellW, previewRows(24)*cellH
 	if w > boxW || h > boxH {
 		t.Errorf("16:9 fallback %dx%d exceeds the preview box %dx%d", w, h, boxW, boxH)
 	}
-	if h != boxH {
-		t.Errorf("16:9 fallback should fill the box height, got %d want %d", h, boxH)
+	if w != boxW && h != boxH {
+		t.Errorf("16:9 fallback %dx%d should fill the preview box %dx%d", w, h, boxW, boxH)
 	}
-	if diff := w*9 - h*16; diff > 16 || diff < -16 {
+	if ratio := float64(w) / float64(h); ratio < 1.75 || ratio > 1.81 {
 		t.Errorf("16:9 fallback %dx%d is not 16:9", w, h)
 	}
 	if w%2 != 0 || h%2 != 0 {
 		t.Errorf("fit %dx%d must stay even for the scale/pad chain", w, h)
+	}
+}
+
+func TestVideoBoxIsBigger(t *testing.T) {
+	for _, term := range []struct {
+		cols, rows int
+	}{{80, 24}, {100, 30}, {200, 60}} {
+		cols, rows := videoBox(term.cols, term.rows)
+		baseCols, baseRows := previewCols(term.cols), previewRows(term.rows)
+		if cols <= baseCols || rows <= baseRows {
+			t.Errorf("video box %dx%d is not bigger than the preview box %dx%d", cols, rows, baseCols, baseRows)
+		}
+		if cols > term.cols-2 || rows > term.rows-2 {
+			t.Errorf("video box %dx%d does not fit terminal %dx%d", cols, rows, term.cols, term.rows)
+		}
+		growth := float64(cols) / float64(baseCols)
+		if growth < 1.4 || growth > 1.6 {
+			t.Errorf("video width grew %.3fx at %dx%d, want about 1.5x", growth, term.cols, term.rows)
+		}
 	}
 }
 
@@ -263,8 +283,9 @@ func TestPreviewBoxStaysModest(t *testing.T) {
 		t.Errorf("tiny terminals should still get a preview, got %d", rows)
 	}
 
+	videoCols, videoRows := videoBox(300, 80)
 	w, h := videoFitSize(300, 80, 1920, 1080)
-	if w > previewMaxCols*cellW || h > previewMaxRows*cellH {
+	if w > videoCols*cellW || h > videoRows*cellH {
 		t.Errorf("fit %dx%d is bigger than the capped preview box", w, h)
 	}
 	if diff := w*1080 - h*1920; diff > 1920 || diff < -1920 {

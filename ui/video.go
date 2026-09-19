@@ -81,8 +81,9 @@ type videoOptions struct {
 }
 
 func videoFitSize(termCols, termRows, srcW, srcH int) (int, int) {
-	boxW := previewCols(termCols) * cellW
-	boxH := previewRows(termRows) * cellH
+	cols, rows := videoBox(termCols, termRows)
+	boxW := cols * cellW
+	boxH := rows * cellH
 	if srcW <= 0 || srcH <= 0 {
 		srcW, srcH = 16, 9
 	}
@@ -511,7 +512,8 @@ func nextFrame(vp *videoPlayer) tea.Cmd {
 
 func renderVideoFrame(vp *videoPlayer, img image.Image, termCols, termRows int) tea.Cmd {
 	return func() tea.Msg {
-		scaled := scaleToFit(img, previewCols(termCols), previewRows(termRows))
+		cols, rows := videoBox(termCols, termRows)
+		scaled := scaleToFit(img, cols, rows)
 		s, err := encodeImage(scaled)
 		if err != nil {
 			return videoDoneMsg{vp: vp, err: fmt.Errorf("render frame: %w", err)}

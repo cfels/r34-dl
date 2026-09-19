@@ -57,6 +57,76 @@ func TestParsePornHubCount(t *testing.T) {
 	}
 }
 
+func TestSuggestionFieldsReadsPornHubPayload(t *testing.T) {
+	payload := []byte(`{"0":"Big Ass","1":"Big Boobs","isDdBannedWord":"false",` +
+		`"popularSearches":["sex hd","busty"],"tags":[{"name":"Big Tits"},{"value":"Big Dick"}]}`)
+	got := matchPredictions(suggestionFields(payload), "big", maxPredictions)
+	want := []string{"Big Ass", "Big Boobs", "Big Tits", "Big Dick"}
+	if len(got) != len(want) {
+		t.Fatalf("predictions = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("predictions = %v, want %v", got, want)
+		}
+	}
+}
+
+func TestParseXVideosTags(t *testing.T) {
+	page := `<a href="/tags/big-ass">Big Ass</a><a href="/tags/big-tits">Big Tits</a>` +
+		`<a href="/tags/big-ass">dup</a><a href="/channels/x">chan</a><a href="/tags/09">09</a>`
+	got := matchPredictions(parseXVideosTags([]byte(page)), "big", maxPredictions)
+	want := []string{"big ass", "big tits"}
+	if len(got) != len(want) {
+		t.Fatalf("predictions = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("predictions = %v, want %v", got, want)
+		}
+	}
+}
+
+func TestParseXHamsterSuggestions(t *testing.T) {
+	page := `<script>window.__data={"search":{"searchVideoSuggestions":{"tags":[` +
+		`{"modelName":"suggestModel","text":"Big Ass","plainText":"Big Ass"},` +
+		`{"modelName":"suggestModel","text":"Big &amp; Bold","plainText":"Big & Bold"}]},` +
+		`"other":{"tags":[{"text":"ignored"}]}}};</script>`
+	got := matchPredictions(parseXHamsterSuggestions([]byte(page)), "big", maxPredictions)
+	want := []string{"Big Ass", "Big & Bold"}
+	if len(got) != len(want) {
+		t.Fatalf("predictions = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("predictions = %v, want %v", got, want)
+		}
+	}
+
+	if tags := parseXHamsterSuggestions([]byte("<html>nothing here</html>")); tags != nil {
+		t.Errorf("page without suggestions returned %v", tags)
+	}
+}
+
+func TestMatchPredictionsKeepsPrefixAndDropsDuplicates(t *testing.T) {
+	got := matchPredictions([]string{"Big Ass", " big   ass ", "big tits", "spanking", ""}, "BIG", 8)
+	want := []string{"Big Ass", "big tits"}
+	if len(got) != len(want) {
+		t.Fatalf("predictions = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("predictions = %v, want %v", got, want)
+		}
+	}
+	if got := matchPredictions([]string{"x"}, "", 8); got != nil {
+		t.Errorf("empty prefix returned %v", got)
+	}
+	if got := matchPredictions([]string{"big tits"}, "big", 1); len(got) != 1 {
+		t.Errorf("limit was ignored: %v", got)
+	}
+}
+
 func TestParsePornHubMediaPicksBestStream(t *testing.T) {
 	streams, err := parsePornHubMedia([]byte(fixture(t, "pornhub_video.html")))
 	if err != nil {
