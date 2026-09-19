@@ -103,48 +103,84 @@ func startBlink() tea.Cmd {
 }
 
 func fetchImage(rawURL string) tea.Cmd {
-	return func() tea.Msg {
-		if !safe.PublicMediaURL(rawURL) {
-			return imageFetchedMsg{err: fmt.Errorf("refusing to fetch unsupported or non-public image url")}
-		}
-		client := &http.Client{
-			Timeout: 30 * time.Second,
-			Transport: &http.Transport{
-				Proxy:       http.ProxyFromEnvironment,
-				DialContext: safe.PublicDialContext(&net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}),
-			},
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				if len(via) >= 10 {
-					return fmt.Errorf("stopped after 10 redirects")
-				}
-				if !safe.PublicMediaURL(req.URL.String()) {
-					return fmt.Errorf("refusing to follow redirect to %s", req.URL.Host)
-				}
-				return nil
-			},
-		}
-		req, err := http.NewRequest(http.MethodGet, rawURL, nil)
-		if err != nil {
-			return imageFetchedMsg{err: fmt.Errorf("build request: %w", err)}
-		}
-		req.Header.Set("User-Agent", "r34-dl/viewer")
-		resp, err := client.Do(req)
-		if err != nil {
-			return imageFetchedMsg{err: fmt.Errorf("fetch: %w", err)}
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			return imageFetchedMsg{err: fmt.Errorf("fetch: %s", resp.Status)}
-		}
-		data, err := io.ReadAll(io.LimitReader(resp.Body, maxImageBytes+1))
-		if err != nil {
-			return imageFetchedMsg{err: fmt.Errorf("read body: %w", err)}
-		}
-		if len(data) > maxImageBytes {
-			return imageFetchedMsg{err: fmt.Errorf("image is larger than %d MiB", maxImageBytes>>20)}
-		}
-		return imageFetchedMsg{data: data}
+	return fetchImagePreview([]string{rawURL})
+}
+
+func fetchPreview(post api.Post) tea.Cmd {
+	sample := post.PreviewURL()
+	file := post.FileURL()
+	if sample == file {
+		return fetchImagePreview([]string{sample})
 	}
+	return fetchImagePreview([]string{sample, file})
+}
+
+func fetchImagePreview(urls []string) tea.Cmd {
+	return func() tea.Msg {
+		var lastErr error
+		var data []byte
+		for _, rawURL := range urls {
+			if rawURL == "" {
+				continue
+			}
+			payload, err := loadImage(rawURL)
+			if err == nil {
+				data = payload
+				break
+			}
+			lastErr = err
+		}
+		if data != nil {
+			return imageFetchedMsg{data: data}
+		}
+		if lastErr == nil {
+			lastErr = fmt.Errorf("no preview url available")
+		}
+		return imageFetchedMsg{err: lastErr}
+	}
+}
+
+func loadImage(rawURL string) ([]byte, error) {
+	if !safe.PublicMediaURL(rawURL) {
+		return nil, fmt.Errorf("refusing to fetch unsupported or non-public image url")
+	}
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			Proxy:       http.ProxyFromEnvironment,
+			DialContext: safe.PublicDialContext(&net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}),
+		},
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return fmt.Errorf("stopped after 10 redirects")
+			}
+			if !safe.PublicMediaURL(req.URL.String()) {
+				return fmt.Errorf("refusing to follow redirect to %s", req.URL.Host)
+			}
+			return nil
+		},
+	}
+	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("User-Agent", "r34-dl/viewer")
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetch: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("fetch: %s", resp.Status)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxImageBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read body: %w", err)
+	}
+	if len(data) > maxImageBytes {
+		return nil, fmt.Errorf("image is larger than %d MiB", maxImageBytes>>20)
+	}
+	return data, nil
 }
 
 func downloadOne(d *dl.Downloader, post api.Post) tea.Cmd {

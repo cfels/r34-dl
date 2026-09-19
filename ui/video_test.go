@@ -301,17 +301,17 @@ func TestVideoBoxIsBigger(t *testing.T) {
 			t.Errorf("video box %dx%d does not fit terminal %dx%d", cols, rows, term.cols, term.rows)
 		}
 		growth := float64(cols) / float64(baseCols)
-		if growth < 1.4 || growth > 1.6 {
-			t.Errorf("video width grew %.3fx at %dx%d, want about 1.5x", growth, term.cols, term.rows)
+		if growth < 1.15 || growth > 1.35 {
+			t.Errorf("video width grew %.3fx at %dx%d, want about 1.25x", growth, term.cols, term.rows)
 		}
 	}
 }
 
 func TestPreviewBoxStaysModest(t *testing.T) {
-	if cols := previewCols(100); cols < 55 || cols > 75 {
+	if cols := previewCols(100); cols < 70 || cols > 80 {
 		t.Errorf("previewCols(100) = %d, want a modest share of the width", cols)
 	}
-	if rows := previewRows(30); rows < 14 || rows > 19 {
+	if rows := previewRows(30); rows < 18 || rows > 24 {
 		t.Errorf("previewRows(30) = %d, want a modest share of the height", rows)
 	}
 	if cols := previewCols(300); cols != previewMaxCols {

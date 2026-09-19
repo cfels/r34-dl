@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -61,6 +62,45 @@ func TestSanitizePostDropsUnsafeSchemes(t *testing.T) {
 		if url := got.FileURL(); strings.HasPrefix(url, "concat") || strings.HasPrefix(url, "file:") {
 			t.Errorf("post %d still resolves to %q", got.ID, url)
 		}
+	}
+}
+
+func TestPreviewURLPrefersSample(t *testing.T) {
+	payload := `[{"id":7159426,"image":"deb.png","directory":1104,"width":3380,"height":2060,"sample":true,` +
+		`"preview_url":"https://safebooru.org/thumbnails/1104/thumbnail_deb.jpg",` +
+		`"sample_url":"https://safebooru.org/samples/1104/sample_deb.jpg",` +
+		`"file_url":"https://safebooru.org/images/1104/deb.png"}]`
+	var posts []Post
+	if err := json.Unmarshal([]byte(payload), &posts); err != nil {
+		t.Fatalf("parse fixture: %v", err)
+	}
+	if len(posts) != 1 {
+		t.Fatalf("got %d posts, want 1", len(posts))
+	}
+	post := sanitizePost(posts[0])
+	if got := post.PreviewURL(); got != "https://safebooru.org/samples/1104/sample_deb.jpg" {
+		t.Errorf("PreviewURL() = %q, want the sample url", got)
+	}
+	if got := post.FileURL(); got != "https://safebooru.org/images/1104/deb.png" {
+		t.Errorf("FileURL() = %q, want the full size file url", got)
+	}
+
+	withoutSample := sanitizePost(Post{ID: 4, Image: "y.jpg", FileURL_: "https://cdn.example.org/y.jpg"})
+	if got := withoutSample.PreviewURL(); got != "https://cdn.example.org/y.jpg" {
+		t.Errorf("PreviewURL() without a sample = %q, want the file url", got)
+	}
+
+	unsafeSample := sanitizePost(Post{
+		ID:        5,
+		Image:     "z.jpg",
+		SampleURL: "file:///etc/passwd",
+		FileURL_:  "https://cdn.example.org/z.jpg",
+	})
+	if unsafeSample.SampleURL != "" {
+		t.Errorf("unsafe sample url survived sanitizing: %q", unsafeSample.SampleURL)
+	}
+	if got := unsafeSample.PreviewURL(); got != "https://cdn.example.org/z.jpg" {
+		t.Errorf("PreviewURL() with a dropped sample = %q, want the file url", got)
 	}
 }
 

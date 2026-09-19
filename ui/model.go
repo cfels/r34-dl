@@ -86,14 +86,37 @@ type Model struct {
 func (m Model) Cfg() conf.Config { return m.cfg }
 
 func (m Model) apiTags() string {
-	tags := strings.TrimSpace(m.query)
-	if !m.aiFilterOn() {
-		return tags
+	parts := make([]string, 0, 2+len(m.cfg.Blacklist))
+	if query := strings.TrimSpace(m.query); query != "" {
+		parts = append(parts, query)
 	}
-	if tags == "" {
-		return "-" + aiTag
+	if m.aiFilterOn() {
+		parts = append(parts, "-"+aiTag)
 	}
-	return tags + " -" + aiTag
+	for _, tag := range m.blacklistTags() {
+		if tag == aiTag && m.aiFilterOn() {
+			continue
+		}
+		parts = append(parts, "-"+tag)
+	}
+	return strings.Join(parts, " ")
+}
+
+func (m Model) blacklistTags() []string {
+	if !api.SupportsNegativeTags(m.cfg.ActiveAPI) {
+		return nil
+	}
+	seen := make(map[string]bool, len(m.cfg.Blacklist))
+	tags := make([]string, 0, len(m.cfg.Blacklist))
+	for _, raw := range m.cfg.Blacklist {
+		tag := conf.NormalizeTag(raw)
+		if tag == "" || seen[tag] {
+			continue
+		}
+		seen[tag] = true
+		tags = append(tags, tag)
+	}
+	return tags
 }
 
 func (m Model) aiFilterOn() bool {

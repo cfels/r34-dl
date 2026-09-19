@@ -111,6 +111,7 @@ type Post struct {
 	Height    int        `json:"height"`
 	Sample    FlexInt    `json:"sample"`
 	Score     FlexInt    `json:"score,omitempty"`
+	SampleURL string     `json:"sample_url"`
 	FileURL_  string     `json:"-"`
 
 	Site     string `json:"-"`
@@ -129,6 +130,13 @@ func (p Post) FileURL() string {
 		return p.Thumb
 	}
 	return fmt.Sprintf("https://safebooru.org/images/%s/%s", p.Directory.String(), p.Image)
+}
+
+func (p Post) PreviewURL() string {
+	if p.SampleURL != "" {
+		return p.SampleURL
+	}
+	return p.FileURL()
 }
 
 type postCountXML struct {
@@ -157,12 +165,16 @@ func sanitizePost(p Post) Post {
 	p.Directory = FlexString(safe.Tag(p.Directory.String()))
 	p.Owner = safe.Tag(p.Owner)
 	p.FileURL_ = safe.URLText(p.FileURL_)
+	p.SampleURL = safe.URLText(p.SampleURL)
 	p.PageURL = safe.URLText(p.PageURL)
 	p.Thumb = safe.URLText(p.Thumb)
 	p.Title = safe.Text(p.Title)
 	p.Duration = safe.Limit(p.Duration, 16)
 	if p.FileURL_ != "" && !safe.MediaURL(p.FileURL_) {
 		p.FileURL_ = ""
+	}
+	if p.SampleURL != "" && !safe.MediaURL(p.SampleURL) {
+		p.SampleURL = ""
 	}
 	if p.Thumb != "" && !safe.MediaURL(p.Thumb) {
 		p.Thumb = ""
@@ -466,6 +478,7 @@ type r34Post struct {
 	Height    int        `json:"height"`
 	Sample    FlexInt    `json:"sample"`
 	Score     FlexInt    `json:"score"`
+	SampleURL string     `json:"sample_url"`
 	FileURL   string     `json:"file_url"`
 }
 
@@ -615,6 +628,7 @@ func (c *Rule34Client) SearchPosts(tags string, limit, page int) ([]Post, error)
 			Height:    r.Height,
 			Sample:    r.Sample,
 			Score:     r.Score,
+			SampleURL: r.SampleURL,
 			FileURL_:  r.FileURL,
 		})
 		posts = append(posts, p)

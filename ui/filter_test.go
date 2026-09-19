@@ -50,6 +50,41 @@ func TestAPITagsAddsAIFilter(t *testing.T) {
 	}
 }
 
+func TestAPITagsAddBlacklist(t *testing.T) {
+	m := newListModel()
+	m.cfg = conf.Config{
+		AgeVerified: true,
+		ActiveAPI:   "safebooru",
+		Blacklist:   []string{"scat", "Big Breasts", "scat", "  "},
+	}
+	m.query = "touhou"
+	if got := m.apiTags(); got != "touhou -scat -big_breasts" {
+		t.Errorf("apiTags = %q, want touhou -scat -big_breasts", got)
+	}
+
+	m.query = "   "
+	if got := m.apiTags(); got != "-scat -big_breasts" {
+		t.Errorf("apiTags = %q, want just the blacklist", got)
+	}
+
+	m.cfg.ActiveAPI = "rule34"
+	m.cfg.FilterAI = true
+	m.cfg.Blacklist = []string{"scat", "ai_generated"}
+	m.query = "touhou"
+	if got := m.apiTags(); got != "touhou -ai_generated -scat" {
+		t.Errorf("apiTags = %q, want touhou -ai_generated -scat", got)
+	}
+
+	m.cfg.ActiveAPI = "pornhub"
+	m.cfg.FilterAI = false
+	if got := m.apiTags(); got != "touhou" {
+		t.Errorf("apiTags = %q, want the blacklist skipped on pornhub", got)
+	}
+	if tags := m.blacklistTags(); len(tags) != 0 {
+		t.Errorf("blacklistTags = %v on pornhub, want none", tags)
+	}
+}
+
 func TestSearchUsesAIFilter(t *testing.T) {
 	client := &recordingClient{}
 	m := NewModel(testClients(client), conf.Config{AgeVerified: true, ActiveAPI: "rule34"}, "touhou", 30)

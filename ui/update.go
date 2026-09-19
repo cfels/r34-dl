@@ -217,10 +217,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "shift+tab":
 				m.cycleAPI(-1)
 				return m, m.startSearch()
-			case "up", "k":
+			case "up", "j":
 				m.cursor--
 				return m, m.clampViewport()
-			case "down", "j":
+			case "down", "k":
 				m.cursor++
 				return m, m.clampViewport()
 			case "pgup":
@@ -251,7 +251,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						}
 					}
 					m.state = stateViewerLoading
-					return m, fetchImage(m.viewerPost.FileURL())
+					return m, fetchPreview(m.viewerPost)
 				}
 			case "enter":
 				if len(m.posts) > 0 {

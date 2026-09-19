@@ -96,6 +96,11 @@ func main() {
 	filterAI := flag.Bool("filter-ai", false, "hide AI generated posts")
 	noFilterAI := flag.Bool("no-filter-ai", false, "show AI generated posts")
 
+	blacklist := flag.String("blacklist", "", "hide tags from results and store them in config (comma-separated)")
+	flag.StringVar(blacklist, "bl", "", "hide tags from results and store them in config (short)")
+	clearBlacklist := flag.Bool("blacklist-clear", false, "clear the tag blacklist")
+	flag.BoolVar(clearBlacklist, "blc", false, "clear the tag blacklist (short)")
+
 	runTests := flag.Bool("run-tests", false, "run tests")
 
 	showVersion := flag.Bool("version", false, "print version and commit")
@@ -115,6 +120,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  --no-audio                       mute video audio\n")
 		fmt.Fprintf(os.Stderr, "  --filter-ai                      hide AI generated posts\n")
 		fmt.Fprintf(os.Stderr, "  --no-filter-ai                   show AI generated posts\n")
+		fmt.Fprintf(os.Stderr, "  -bl, --blacklist <tags>          hide tags from results and store them in config (comma-separated, prefix a tag with - to remove it)\n")
+		fmt.Fprintf(os.Stderr, "  -blc, --blacklist-clear          clear the tag blacklist\n")
 		fmt.Fprintf(os.Stderr, "  --run-tests                      run tests\n")
 	}
 
@@ -169,6 +176,45 @@ func main() {
 			log.Fatalf("failed to save config: %v", err)
 		}
 		fmt.Println("search history cleared")
+		return
+	}
+
+	if *clearBlacklist {
+		cfg, err := conf.Load()
+		if err != nil {
+			log.Fatalf("failed to load config: %v", err)
+		}
+		cfg.Blacklist = nil
+		if err := conf.Save(cfg); err != nil {
+			log.Fatalf("failed to save config: %v", err)
+		}
+		fmt.Println("tag blacklist cleared")
+		return
+	}
+
+	if *blacklist != "" {
+		cfg, err := conf.Load()
+		if err != nil {
+			log.Fatalf("failed to load config: %v", err)
+		}
+		cfg, added, removed := conf.AddBlacklist(cfg, *blacklist)
+		if err := conf.Save(cfg); err != nil {
+			log.Fatalf("failed to save config: %v", err)
+		}
+		if len(added) > 0 {
+			fmt.Printf("blacklisted: %s\n", strings.Join(added, ", "))
+		}
+		if len(removed) > 0 {
+			fmt.Printf("removed from blacklist: %s\n", strings.Join(removed, ", "))
+		}
+		if len(added) == 0 && len(removed) == 0 {
+			fmt.Println("blacklist unchanged")
+		}
+		if len(cfg.Blacklist) > 0 {
+			fmt.Printf("blacklist now: %s\n", strings.Join(cfg.Blacklist, ", "))
+		} else {
+			fmt.Println("blacklist is empty")
+		}
 		return
 	}
 

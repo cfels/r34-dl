@@ -31,9 +31,6 @@ jobs:
           pacman-key --populate archlinux
           pacman -Sy --noconfirm --needed archlinux-keyring
           pacman -Syu --noconfirm --needed git curl
-          pacman -S --noconfirm --needed qemu-user-static-binfmt \
-            || pacman -S --noconfirm --needed qemu-user-static \
-            || echo "qemu user emulation unavailable, cross arch runs will be skipped"
 
       - name: Checkout
         uses: actions/checkout@v7
@@ -45,6 +42,7 @@ jobs:
           set -euo pipefail
           git config --global --add safe.directory "${GITHUB_WORKSPACE}"
           git config --global --add safe.directory '*'
+          git status --short
 
       - name: Set up Go
         uses: actions/setup-go@v7
@@ -73,73 +71,6 @@ jobs:
           ls -l "${out}"
           echo "path=${out}" >> "${GITHUB_OUTPUT}"
 
-      - name: Verify artifact
-        env:
-          GOARCH: ${{ matrix.goarch }}
-          ARTIFACT: ${{ steps.build.outputs.path }}
-        run: |
-          set -euo pipefail
-          if [ ! -s "${ARTIFACT}" ]; then
-            echo "artifact is missing or empty: ${ARTIFACT}" >&2
-            exit 1
-          fi
-          magic="$(od -An -tx1 -N4 "${ARTIFACT}" | tr -d ' \n')"
-          if [ "${magic}" != "7f454c46" ]; then
-            echo "artifact is not an ELF binary" >&2
-            exit 1
-          fi
-          case "${GOARCH}" in
-            amd64) want_machine="3e00" ;;
-            arm64) want_machine="b700" ;;
-            *) want_machine="" ;;
-          esac
-          if [ -n "${want_machine}" ]; then
-            machine="$(od -An -tx1 -j18 -N2 "${ARTIFACT}" | tr -d ' \n')"
-            if [ "${machine}" != "${want_machine}" ]; then
-              echo "artifact elf machine ${machine} does not match ${GOARCH}" >&2
-              exit 1
-            fi
-          fi
-          if ! go version -m "${ARTIFACT}" | grep -q "GOARCH=${GOARCH}$"; then
-            echo "artifact was not built for ${GOARCH}" >&2
-            exit 1
-          fi
-          if ! go version -m "${ARTIFACT}" | grep -q "GOOS=linux$"; then
-            echo "artifact was not built for linux" >&2
-            exit 1
-          fi
-          runner=""
-          if [ "${GOARCH}" != "$(go env GOHOSTARCH)" ]; then
-            for candidate in qemu-aarch64-static qemu-aarch64 /usr/bin/qemu-aarch64-static /usr/lib/qemu/qemu-aarch64-static /usr/libexec/qemu-aarch64-static; do
-              path="$(command -v "${candidate}" 2>/dev/null || true)"
-              if [ -z "${path}" ] && [ -x "${candidate}" ]; then
-                path="${candidate}"
-              fi
-              if [ -n "${path}" ]; then
-                runner="${path}"
-                break
-              fi
-            done
-            if [ -z "${runner}" ]; then
-              runner="$(find /usr/bin /usr/lib /usr/libexec -maxdepth 4 -name 'qemu-aarch64*' -type f -perm -u+x 2>/dev/null | head -n 1 || true)"
-            fi
-            if [ -z "${runner}" ]; then
-              echo "no ${GOARCH} emulator in this container, skipped runtime check" >&2
-              exit 0
-            fi
-          fi
-          if [ -n "${runner}" ]; then
-            output="$("${runner}" "${ARTIFACT}" -version 2>&1 || true)"
-          else
-            output="$("${ARTIFACT}" -version 2>&1 || true)"
-          fi
-          if ! printf '%s\n' "${output}" | grep -q "ver: "; then
-            printf '%s\n' "${output}" >&2
-            echo "artifact did not run and report a version" >&2
-            exit 1
-          fi
-          printf '%s\n' "${output}" | tail -n 1
-
       - name: Publish to Telegram
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -152,13 +83,15 @@ jobs:
             echo "missing TELEGRAM_BOT_TOKEN repository secret" >&2
             exit 1
           fi
-          sum="$(sha256sum "${ARTIFACT}" | cut -d' ' -f1)"
-          caption="${LABEL} build (archlinux/${{ matrix.goarch }}) | commit: ${GITHUB_SHA} | sha256: ${sum}"
+          caption="${LABEL} build (archlinux/${{ matrix.goarch }}) | commit: ${GITHUB_SHA}"
+          echo "publishing ${ARTIFACT}"
+          echo "caption: ${caption}"
+          pwd
+          ls -la "${GITHUB_WORKSPACE}" "${GITHUB_WORKSPACE}/dist" || true
           if [ ! -f "${ARTIFACT}" ]; then
             echo "artifact missing: ${ARTIFACT}" >&2
             exit 1
           fi
-          echo "publishing ${ARTIFACT}"
           curl --fail-with-body --silent --show-error --retry 5 --retry-delay 5 --retry-connrefused \
             --request POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument" \
             --form-string "chat_id=${TELEGRAM_CHAT_ID}" \

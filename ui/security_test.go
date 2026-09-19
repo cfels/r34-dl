@@ -170,6 +170,20 @@ func TestRenderImageAcceptsNormalImage(t *testing.T) {
 	}
 }
 
+func TestPreviewSizePolicy(t *testing.T) {
+	for _, format := range []string{"jpeg", "png"} {
+		if previewTooLarge(format, 4044, 6000) {
+			t.Errorf("%s 4044x6000 should stay previewable", format)
+		}
+	}
+	if !previewTooLarge("jpeg", 10000, 10000) {
+		t.Error("10000x10000 jpeg should exceed the decode budget")
+	}
+	if !previewTooLarge("png", 20000, 20000) || !previewTooLarge("png", 2, 20000) {
+		t.Error("images past the side limit should be rejected")
+	}
+}
+
 func TestImageFetchRejectsUnsupportedScheme(t *testing.T) {
 	for _, raw := range []string{"file:///etc/passwd", "concat:/etc/passwd", "/etc/passwd"} {
 		msg := fetchImage(raw)()

@@ -21,9 +21,27 @@ const kittyChunkSize = 4096
 
 const (
 	maxImageBytes  = 24 << 20
-	maxImagePixels = 16_000_000
+	maxDecodeBytes = 256 << 20
 	maxImageSide   = 10_000
 )
+
+func decodeCost(format string, width, height int) int64 {
+	bytesPerPixel := int64(8)
+	switch format {
+	case "jpeg":
+		bytesPerPixel = 3
+	case "gif":
+		bytesPerPixel = 2
+	}
+	return int64(width) * int64(height) * bytesPerPixel
+}
+
+func previewTooLarge(format string, width, height int) bool {
+	if width > maxImageSide || height > maxImageSide {
+		return true
+	}
+	return decodeCost(format, width, height) > maxDecodeBytes
+}
 
 func scaleToFit(img image.Image, termCols, termRows int) image.Image {
 	maxPxW := termCols * cellW
@@ -117,14 +135,14 @@ func halfBlockEncode(img image.Image) (string, error) {
 
 func renderImage(data []byte, termCols, termRows int) tea.Cmd {
 	return func() tea.Msg {
-		cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+		cfg, format, err := image.DecodeConfig(bytes.NewReader(data))
 		if err != nil {
 			return imageFetchedMsg{err: fmt.Errorf("decode image: %w", err)}
 		}
 		if cfg.Width <= 0 || cfg.Height <= 0 {
 			return imageFetchedMsg{err: fmt.Errorf("image reports invalid dimensions %dx%d", cfg.Width, cfg.Height)}
 		}
-		if cfg.Width > maxImageSide || cfg.Height > maxImageSide || int64(cfg.Width)*int64(cfg.Height) > maxImagePixels {
+		if previewTooLarge(format, cfg.Width, cfg.Height) {
 			return imageFetchedMsg{err: fmt.Errorf("image too large to preview (%dx%d)", cfg.Width, cfg.Height)}
 		}
 		img, _, err := image.Decode(bytes.NewReader(data))

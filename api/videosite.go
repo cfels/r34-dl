@@ -91,6 +91,14 @@ func IsAdultSite(name string) bool {
 	return false
 }
 
+func SupportsNegativeTags(name string) bool {
+	switch name {
+	case "safebooru", "rule34":
+		return true
+	}
+	return false
+}
+
 func Media(p Post) (Stream, error) {
 	if !p.Video {
 		return Stream{URL: p.FileURL()}, nil

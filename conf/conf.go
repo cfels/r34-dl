@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
+
+	"moxiu/r34-dl/safe"
 )
 
 type Config struct {
@@ -13,7 +16,70 @@ type Config struct {
 	ActiveAPI     string   `json:"active_api"`
 	AudioEnabled  bool     `json:"audio_enabled,omitempty"`
 	FilterAI      bool     `json:"filter_ai,omitempty"`
+	Blacklist     []string `json:"blacklist,omitempty"`
 	SearchHistory []string `json:"search_history,omitempty"`
+}
+
+func NormalizeTag(raw string) string {
+	return safe.Tag(strings.ToLower(strings.Join(strings.Fields(raw), "_")))
+}
+
+func BlacklistTags(raw string) []string {
+	parts := strings.Split(raw, ",")
+	tags := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if tag := NormalizeTag(part); tag != "" {
+			tags = append(tags, tag)
+		}
+	}
+	return tags
+}
+
+func AddBlacklist(cfg Config, raw string) (Config, []string, []string) {
+	wanted := BlacklistTags(raw)
+	drop := make(map[string]bool, len(wanted))
+	add := make([]string, 0, len(wanted))
+	for _, tag := range wanted {
+		if strings.HasPrefix(tag, "-") {
+			if trimmed := strings.TrimLeft(tag, "-"); trimmed != "" {
+				drop[trimmed] = true
+			}
+			continue
+		}
+		add = append(add, tag)
+	}
+
+	kept := make([]string, 0, len(cfg.Blacklist)+len(add))
+	seen := make(map[string]bool, len(cfg.Blacklist)+len(add))
+	removed := make([]string, 0, len(drop))
+	for _, raw := range cfg.Blacklist {
+		tag := NormalizeTag(raw)
+		if tag == "" {
+			continue
+		}
+		if drop[tag] {
+			removed = append(removed, tag)
+			continue
+		}
+		if seen[tag] {
+			continue
+		}
+		seen[tag] = true
+		kept = append(kept, tag)
+	}
+
+	added := make([]string, 0, len(add))
+	for _, tag := range add {
+		if seen[tag] {
+			continue
+		}
+		seen[tag] = true
+		kept = append(kept, tag)
+		added = append(added, tag)
+	}
+
+	cfg.Blacklist = kept
+	return cfg, added, removed
 }
 
 func path() (string, error) {

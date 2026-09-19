@@ -8,15 +8,15 @@ const (
 )
 
 const (
-	previewWidthFraction  = 0.64
-	previewHeightFraction = 0.64
-	previewMinCols        = 30
-	previewMaxCols        = 84
-	previewMinRows        = 8
-	previewMaxRows        = 21
+	previewWidthFraction  = 0.768
+	previewHeightFraction = 0.768
+	previewMinCols        = 36
+	previewMaxCols        = 101
+	previewMinRows        = 10
+	previewMaxRows        = 25
 )
 
-const videoZoom = 1.5
+const videoZoom = 1.25
 
 func previewCols(termCols int) int {
 	cols := int(float64(termCols) * previewWidthFraction)

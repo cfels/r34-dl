@@ -234,6 +234,13 @@ func (m Model) View() string {
 		if m.cfg.ActiveAPI == "rule34" {
 			s += switchLine(m.cfg.FilterAI) + "\n"
 		}
+		if tags := m.blacklistTags(); len(tags) > 0 {
+			hidden := make([]string, 0, len(tags))
+			for _, tag := range tags {
+				hidden = append(hidden, "-"+tag)
+			}
+			s += dimStyle.Render("   blacklist: "+strings.Join(hidden, " ")) + "\n"
+		}
 		s += "\n"
 		if m.cfg.ActiveAPI == "rule34" && m.cfg.APIKey == "" {
 			s += errorStyle.Render("   rule34 now requires an API key") + "\n"

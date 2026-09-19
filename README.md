@@ -67,8 +67,14 @@ Options:
   --no-audio                       mute video audio
   --filter-ai                      hide AI generated posts
   --no-filter-ai                   show AI generated posts
+  -bl, --blacklist <tags>          hide tags from results and store them in config (comma-separated)
+  -blc, --blacklist-clear          clear the tag blacklist
   --run-tests                      run tests
 ```
+
+### Tag blacklist
+`./r34-dl -bl "scat,big breasts"` stores those tags in ur config and every search hides them (sent as `-scat -big_breasts`, so it work's on `safebooru` and `rule34`, the video site's search engine's don't take negative tag's),
+tag's u type with space's get stored with `_`, and prefixing a tag with `-` (like `-bl "-scat"`) remove's it from the blacklist, `-blc` wipe's the whole list, and the search screen show's the active blacklist under the tag input
 
 ### Obatining API key
 Here's how to get one
