@@ -39,9 +39,8 @@ ffmpeg
 ```
 
 ### Donwloading
-you can download pre-built binary from [Release's](https://github.com/cfels/r34-dl/releases)
-
-build's are also pushed to the telegram channel, named after the arch they run on: `archlinux-x86_64` for `x86_64` and `archlinux-aarch64` for `aarch64`, so just compare it to `uname -m` before picking one, each post also show's the sha256 of the file and picking the wrong one only print's an `exec format error` from your shell
+you can download pre-built binary from [Release's](https://github.com/cfels/r34-dl/releases) <br>
+or if u feeling like getting the latest dev build then download it off the TG channel: [t.me/r34_dl](https://t.me/r34_dl)
 
 ### Building
 ```
@@ -91,16 +90,17 @@ paste ur full rule34 API key (e.g. &api_key=xxx&user_id=777):
 ur DONE! u can access r34-dl (rule34 option)
 
 ### Showcase
-<img src="https://github.com/cfels/r34-dl/blob/dev/assets/showcase/showcase.gif?raw=true" width="600">
+<img src="https://github.com/cfels/r34-dl/blob/release/assets/showcase/preview.gif" width="855">
 
 ### Screenshots
 
 <table border="0">
   <tr>
-    <td><img src="https://raw.githubusercontent.com/cfels/r34-dl/dev/assets/images/3.png" width="400"></td>
+    <td><img src="https://github.com/cfels/r34-dl/blob/e44ab4d6401fe3c54a12264b568df452cbbda881/assets/images/remielle.png" width="460"></td>
     <td>
-      <img src="https://raw.githubusercontent.com/cfels/r34-dl/dev/assets/images/2.png" width="400"><br><br>
-      <img src="https://raw.githubusercontent.com/cfels/r34-dl/dev/assets/images/1.png" width="400">
+      <img src="https://github.com/cfels/r34-dl/blob/e44ab4d6401fe3c54a12264b568df452cbbda881/assets/images/img_result.png" width="400"><br><br>
+      <img src="https://github.com/cfels/r34-dl/blob/release/assets/images/ph.png" width="400"><br><br>
+      <img src="https://github.com/cfels/r34-dl/blob/e44ab4d6401fe3c54a12264b568df452cbbda881/assets/images/r34_main.png" width="400">
     </td>
   </tr>
 </table>
