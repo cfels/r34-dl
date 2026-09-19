@@ -20,6 +20,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case releaseInfoMsg:
 		if msg.err == nil {
 			m.release = msg.info
+			m.outdated = msg.outdated
 		}
 		return m, nil
 

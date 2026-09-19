@@ -41,7 +41,7 @@ ffmpeg
 ### Donwloading
 you can download pre-built binary from [Release's](https://github.com/cfels/r34-dl/releases)
 
-build's are also pushed to the telegram channel as `archlinux-amd64` and `archlinux-arm64`, check `uname -m` before picking one (`x86_64` need's the amd64 build, `aarch64`/`arm64` need's the arm64 build), the wrong one only print's an `exec format error` from your shell
+build's are also pushed to the telegram channel, named after the arch they run on: `archlinux-x86_64` for `x86_64` and `archlinux-aarch64` for `aarch64`, so just compare it to `uname -m` before picking one, each post also show's the sha256 of the file and picking the wrong one only print's an `exec format error` from your shell
 
 ### Building
 ```

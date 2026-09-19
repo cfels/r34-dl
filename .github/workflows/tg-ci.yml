@@ -21,7 +21,9 @@ jobs:
       matrix:
         include:
           - goarch: amd64
+            uname: x86_64
           - goarch: arm64
+            uname: aarch64
 
     steps:
       - name: Prepare Arch Linux container
@@ -62,13 +64,14 @@ jobs:
         run: |
           set -euo pipefail
           short="${GITHUB_SHA:0:7}"
-          name="r34-dl-${short}-archlinux-${{ matrix.goarch }}"
+          name="r34-dl-${short}-archlinux-${{ matrix.uname }}"
           out="${GITHUB_WORKSPACE}/dist/${name}"
           mkdir -p "${GITHUB_WORKSPACE}/dist"
           go build -trimpath \
             -ldflags "-s -w -X moxiu/r34-dl/ui.buildVersion=dev -X moxiu/r34-dl/ui.buildCommit=${GITHUB_SHA}" \
             -o "${out}" .
-          ls -l "${out}"
+          sha256sum "${out}" > "${out}.sha256"
+          ls -l "${out}" "${out}.sha256"
           echo "path=${out}" >> "${GITHUB_OUTPUT}"
 
       - name: Publish to Telegram
@@ -83,15 +86,16 @@ jobs:
             echo "missing TELEGRAM_BOT_TOKEN repository secret" >&2
             exit 1
           fi
-          caption="${LABEL} build (archlinux/${{ matrix.goarch }}) | commit: ${GITHUB_SHA}"
           echo "publishing ${ARTIFACT}"
-          echo "caption: ${caption}"
           pwd
           ls -la "${GITHUB_WORKSPACE}" "${GITHUB_WORKSPACE}/dist" || true
           if [ ! -f "${ARTIFACT}" ]; then
             echo "artifact missing: ${ARTIFACT}" >&2
             exit 1
           fi
+          digest="$(cut -d' ' -f1 "${ARTIFACT}.sha256")"
+          caption="${LABEL} build (archlinux/${{ matrix.uname }}) | commit: ${GITHUB_SHA} | sha256: ${digest}"
+          echo "caption: ${caption}"
           curl --fail-with-body --silent --show-error --retry 5 --retry-delay 5 --retry-connrefused \
             --request POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument" \
             --form-string "chat_id=${TELEGRAM_CHAT_ID}" \

@@ -79,8 +79,9 @@ type Model struct {
 	suggestPick  bool
 	suggestGen   int
 
-	version versionInfo
-	release versionInfo
+	version  versionInfo
+	release  versionInfo
+	outdated bool
 }
 
 func (m Model) Cfg() conf.Config { return m.cfg }

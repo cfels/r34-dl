@@ -17,9 +17,8 @@ import (
 )
 
 const (
-	releasesRepo     = "cfels/r34-dl"
-	latestReleaseAPI = "https://api.github.com/repos/" + releasesRepo + "/releases/latest"
-	tagCommitAPI     = "https://api.github.com/repos/" + releasesRepo + "/commits/"
+	releasesRepo    = "cfels/r34-dl"
+	releasesPageURL = "https://github.com/" + releasesRepo + "/releases/latest"
 )
 
 const (
@@ -32,6 +31,10 @@ const (
 var (
 	buildVersion string
 	buildCommit  string
+
+	latestReleaseAPI = "https://api.github.com/repos/" + releasesRepo + "/releases/latest"
+	tagCommitAPI     = "https://api.github.com/repos/" + releasesRepo + "/commits/"
+	compareCommitAPI = "https://api.github.com/repos/" + releasesRepo + "/compare/"
 )
 
 type versionInfo struct {
@@ -40,8 +43,95 @@ type versionInfo struct {
 }
 
 type releaseInfoMsg struct {
-	info versionInfo
-	err  error
+	info     versionInfo
+	outdated bool
+	err      error
+}
+
+func (v versionInfo) label() string {
+	switch {
+	case v.version != "" && v.version != "dev":
+		return v.version
+	case v.commit != "":
+		return v.commit
+	case v.version != "":
+		return v.version
+	}
+	return "unknown"
+}
+
+func splitVersion(raw string) ([]int, string) {
+	core := raw
+	pre := ""
+	if idx := strings.IndexAny(raw, "-+"); idx >= 0 {
+		core, pre = raw[:idx], raw[idx+1:]
+	}
+	parts := strings.Split(core, ".")
+	nums := make([]int, 0, len(parts))
+	for _, part := range parts {
+		n := 0
+		for _, r := range part {
+			if r < '0' || r > '9' || n > 1_000_000 {
+				break
+			}
+			n = n*10 + int(r-'0')
+		}
+		nums = append(nums, n)
+	}
+	return nums, pre
+}
+
+func versionNewer(latest, current string) bool {
+	latestNums, latestPre := splitVersion(latest)
+	currentNums, currentPre := splitVersion(current)
+	for i := 0; i < len(latestNums) || i < len(currentNums); i++ {
+		var l, c int
+		if i < len(latestNums) {
+			l = latestNums[i]
+		}
+		if i < len(currentNums) {
+			c = currentNums[i]
+		}
+		if l != c {
+			return l > c
+		}
+	}
+	if latestPre == currentPre {
+		return false
+	}
+	if latestPre == "" {
+		return true
+	}
+	if currentPre == "" {
+		return false
+	}
+	return latestPre > currentPre
+}
+
+func sameCommit(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	a, b = strings.ToLower(a), strings.ToLower(b)
+	return a == b || strings.HasPrefix(a, b) || strings.HasPrefix(b, a)
+}
+
+func releaseOutdated(client *http.Client, local, release versionInfo) bool {
+	if release.version == "" || release.version == "dev" {
+		return false
+	}
+	if local.version != "" && local.version != "dev" {
+		return versionNewer(release.version, local.version)
+	}
+	if local.commit == "" || release.commit == "" || client == nil || sameCommit(local.commit, release.commit) {
+		return false
+	}
+	status, err := githubField(client,
+		compareCommitAPI+url.PathEscape(local.commit)+"..."+url.PathEscape(release.commit), "status")
+	if err != nil {
+		return false
+	}
+	return status == "ahead"
 }
 
 func sanitizeField(raw string, max int) string {
@@ -175,7 +265,7 @@ func fetchReleaseInfo() tea.Cmd {
 		if err == nil {
 			info.commit = shortCommit(sha)
 		}
-		return releaseInfoMsg{info: info}
+		return releaseInfoMsg{info: info, outdated: releaseOutdated(client, localVersionInfo(), info)}
 	}
 }
 
@@ -210,16 +300,41 @@ func (m Model) versionLine() string {
 	return dimStyle.Render("  " + formatVersionLine(m.versionInfo()))
 }
 
+func updateNoticeText(local, release versionInfo, outdated bool) string {
+	if !outdated || release.version == "" {
+		return ""
+	}
+	return fmt.Sprintf("new version available: %s (you have %s) → %s",
+		release.version, local.label(), releasesPageURL)
+}
+
+func (m Model) updateNoticeLine() string {
+	notice := updateNoticeText(m.version, m.release, m.outdated)
+	if notice == "" {
+		return ""
+	}
+	return updateStyle.Render("  ⚠ " + notice)
+}
+
 func (m Model) bannerText() string {
-	return titleStyle.Render(bannerASCII) + "\n" + m.versionLine()
+	text := titleStyle.Render(bannerASCII) + "\n" + m.versionLine()
+	if notice := m.updateNoticeLine(); notice != "" {
+		text += "\n" + notice
+	}
+	return text
+}
+
+func latestReleaseStatus() (versionInfo, bool) {
+	msg, ok := fetchReleaseInfo()().(releaseInfoMsg)
+	if !ok || msg.err != nil {
+		return versionInfo{}, false
+	}
+	return msg.info, msg.outdated
 }
 
 func latestReleaseInfo() versionInfo {
-	msg, ok := fetchReleaseInfo()().(releaseInfoMsg)
-	if !ok || msg.err != nil {
-		return versionInfo{}
-	}
-	return msg.info
+	info, _ := latestReleaseStatus()
+	return info
 }
 
 func VersionLine() string {
@@ -227,5 +342,12 @@ func VersionLine() string {
 }
 
 func VersionBanner() string {
-	return titleStyle.Render(bannerASCII) + "\n" + dimStyle.Render("  "+VersionLine())
+	local := localVersionInfo()
+	release, outdated := latestReleaseStatus()
+	text := titleStyle.Render(bannerASCII) + "\n" +
+		dimStyle.Render("  "+formatVersionLine(mergeVersionInfo(local, release)))
+	if notice := updateNoticeText(local, release, outdated); notice != "" {
+		text += "\n" + updateStyle.Render("  ⚠ "+notice)
+	}
+	return text
 }

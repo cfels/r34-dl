@@ -33,6 +33,7 @@ var (
 	dimStyle      = lipgloss.NewStyle().Foreground(mochaOverlay0)
 	errorStyle    = lipgloss.NewStyle().Foreground(mochaRed)
 	noticeStyle   = lipgloss.NewStyle().Foreground(mochaYellow)
+	updateStyle   = lipgloss.NewStyle().Foreground(mochaYellow).Bold(true)
 	inputStyle    = lipgloss.NewStyle().Foreground(mochaText)
 	cursorStyle   = lipgloss.NewStyle().Foreground(mochaLavender)
 	scrollStyle   = lipgloss.NewStyle().Foreground(mochaBlue)
@@ -294,6 +295,9 @@ func (m Model) View() string {
 		}
 		s += "\n" + scrollStyle.Render(countLabel)
 		s += "  " + dimStyle.Render("↑/↓·j/k: move · p: preview · enter: download · tab: switch site · /: search · q: quit")
+		if m.outdated {
+			s += "  " + updateStyle.Render("update available")
+		}
 		return s
 
 	case stateViewerLoading:
