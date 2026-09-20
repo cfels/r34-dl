@@ -235,6 +235,9 @@ func (m Model) View() string {
 		if m.cfg.ActiveAPI == "rule34" {
 			s += switchLine(m.cfg.FilterAI) + "\n"
 		}
+		if m.bulkMode {
+			s += dimStyle.Render("   bulk download mode (--bulk)") + "\n"
+		}
 		if tags := m.blacklistTags(); len(tags) > 0 {
 			hidden := make([]string, 0, len(tags))
 			for _, tag := range tags {
@@ -273,11 +276,14 @@ func (m Model) View() string {
 		if end > len(m.posts) {
 			end = len(m.posts)
 		}
-		s := titleStyle.Render("Search Results:") + "  " + m.apiLabel() + "\n\n"
+		s := titleStyle.Render("Search Results:") + "  " + m.apiLabel()
 		if m.aiFilterOn() {
-			s = titleStyle.Render("Search Results:") + "  " + m.apiLabel() +
-				"  " + dimStyle.Render("[no AI]") + "\n\n"
+			s += "  " + dimStyle.Render("[no AI]")
 		}
+		if m.bulkMode {
+			s += "  " + noticeStyle.Render("[bulk]")
+		}
+		s += "\n\n"
 		for i := m.offset; i < end; i++ {
 			s += renderPostLine(m.posts[i], m.width, i == m.cursor) + "\n"
 		}
@@ -294,7 +300,11 @@ func (m Model) View() string {
 			countLabel += dimStyle.Render(" (end)")
 		}
 		s += "\n" + scrollStyle.Render(countLabel)
-		s += "  " + dimStyle.Render("↑/↓·j/k: move · p: preview · enter: download · tab: switch site · /: search · q: quit")
+		action := "enter: download"
+		if m.bulkMode {
+			action = "enter: bulk download"
+		}
+		s += "  " + dimStyle.Render("↑/↓·j/k: move · p: preview · "+action+" · tab: switch site · /: search · q: quit")
 		if m.outdated {
 			s += "  " + updateStyle.Render("update available")
 		}
@@ -302,6 +312,9 @@ func (m Model) View() string {
 
 	case stateViewerLoading:
 		return dimStyle.Render(fmt.Sprintf("fetching #%d ...", m.viewerPost.ID))
+
+	case stateBulk:
+		return m.bulkView()
 
 	case stateVideoPlaying:
 		audio := "audio: on"
@@ -334,6 +347,74 @@ func (m Model) View() string {
 
 	}
 	return ""
+}
+
+func (m Model) bulkFieldValue(value string, focused bool) string {
+	value = safe.Limit(value, safe.MaxTagRunes)
+	if !focused {
+		return inputStyle.Render(value)
+	}
+	return inputStyle.Render(value) + cursorStyle.Reverse(true).Render(" ")
+}
+
+func (m Model) bulkView() string {
+	s := m.apiLabel() + " " + titleStyle.Render("Bulk download") +
+		dimStyle.Render("   tab: switch site · esc: back") + "\n\n"
+
+	switch m.bulkStage {
+	case bulkForm:
+		s += inputStyle.Render("   tags:  ") + m.bulkFieldValue(m.bulkTags, m.bulkFocus == 0) + "\n"
+		defaultCount := m.limit
+		if defaultCount <= 0 {
+			defaultCount = defaultBulkCount
+		}
+		if m.bulkInput == "" {
+			s += inputStyle.Render("   count: ") + dimStyle.Render(fmt.Sprintf("[default %d]", defaultCount)) + "\n"
+		} else {
+			s += inputStyle.Render("   count: ") + m.bulkFieldValue(m.bulkInput, m.bulkFocus == 1) + "\n"
+		}
+		s += "\n" + dimStyle.Render("   enter: next field / start download · ↑/↓: pick field · tab: switch site")
+		return s
+
+	case bulkRunning:
+		s += m.bulkLogView()
+		if m.bulkTotal > 0 {
+			progress := fmt.Sprintf("   %d/%d saved", m.bulkDone+m.bulkFailed, m.bulkTotal)
+			if m.bulkFailed > 0 {
+				progress += fmt.Sprintf(" · %d failed", m.bulkFailed)
+			}
+			s += "\n" + scrollStyle.Render(progress) + dimStyle.Render("   waiting for downloads to finish...")
+		} else if !m.bulkActive {
+			s += "\n" + dimStyle.Render("   searching results...")
+		}
+		return s
+	}
+
+	s += m.bulkLogView()
+	s += "\n" + noticeStyle.Render(fmt.Sprintf("   done: %d saved, %d failed", m.bulkDone, m.bulkFailed)) +
+		dimStyle.Render("   any key: back")
+	return s
+}
+
+func (m Model) bulkLogView() string {
+	width := m.width - 8
+	if width < 20 {
+		width = 20
+	}
+	s := ""
+	for _, line := range m.bulkLog {
+		style := inputStyle
+		switch {
+		case strings.HasPrefix(line, "failed"):
+			style = errorStyle
+		case strings.HasPrefix(line, "saved"):
+			style = noticeStyle
+		case strings.HasPrefix(line, "done:"):
+			style = selectedStyle
+		}
+		s += style.Render("   "+safe.Limit(line, width)) + "\n"
+	}
+	return s
 }
 
 func postSize(p api.Post) string {

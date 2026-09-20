@@ -1,14 +1,85 @@
 package ui
 
 import (
+	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"moxiu/r34-dl/api"
 	"moxiu/r34-dl/conf"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
+
+func TestLiveCounterReportsSiteTotalForFilteredSearch(t *testing.T) {
+	if os.Getenv("R34_LIVE") == "" {
+		t.Skip("set R34_LIVE=1 to run")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("locating home: %v", err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	saved, err := conf.Load()
+	if err != nil {
+		t.Fatalf("loading config: %v", err)
+	}
+	if saved.APIKey == "" || saved.UserID == "" {
+		t.Skip("rule34 needs stored api credentials")
+	}
+	cfg := conf.Config{
+		AgeVerified: true,
+		ActiveAPI:   "rule34",
+		FilterAI:    true,
+		APIKey:      saved.APIKey,
+		UserID:      saved.UserID,
+	}
+	clients := map[string]api.Client{
+		"rule34":    api.NewRule34Client(cfg.UserID, cfg.APIKey),
+		"safebooru": api.NewSafebooruClient(),
+	}
+	for _, query := range []string{"remielle_dan", "remielle_dan video", "jane_doe_(zenless_zone_zero)"} {
+		m := NewModel(clients, cfg, query, 30)
+		m.width, m.height = 120, 40
+
+		msg, ok := runCmd(m.startSearch(), 30*time.Second)
+		if !ok {
+			t.Fatal("search timed out")
+		}
+		batch, ok := msg.(tea.BatchMsg)
+		if !ok {
+			t.Fatalf("search returned %T, want a batch of commands", msg)
+		}
+		for _, cmd := range batch {
+			msg, ok := runCmd(cmd, 30*time.Second)
+			if !ok || msg == nil {
+				continue
+			}
+			if _, tick := msg.(countTickMsg); tick {
+				continue
+			}
+			updated, _ := m.Update(msg)
+			m = updated.(Model)
+		}
+		if !m.totalKnown {
+			t.Fatalf("%s: the counter was not reported", query)
+		}
+		want, err := clients["rule34"].CountPosts(query)
+		if err != nil {
+			t.Fatalf("%s: site count: %v", query, err)
+		}
+		t.Logf("%s: counter=%d website=%d", query, m.totalCount, want)
+		if m.totalCount != want {
+			t.Errorf("%s: counter = %d, the site shows %d", query, m.totalCount, want)
+		}
+		if label := fmt.Sprintf("[1/%d]", want); !strings.Contains(m.View(), label) {
+			t.Errorf("%s: view should show %q:\n%s", query, label, m.View())
+		}
+	}
+}
 
 func TestLivePredictionsAcrossVideoSites(t *testing.T) {
 	if os.Getenv("R34_LIVE") == "" {

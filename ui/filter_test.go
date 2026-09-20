@@ -112,8 +112,10 @@ func TestSearchUsesAIFilter(t *testing.T) {
 	if len(client.counted) < 2 {
 		t.Fatalf("expected a count per toggle, got %v", client.counted)
 	}
-	if client.counted[0] != "touhou -ai_generated" || client.counted[1] != "touhou" {
-		t.Errorf("counts used %v, want the filter applied then removed", client.counted)
+	for i, got := range client.counted[:2] {
+		if got != "touhou" {
+			t.Errorf("count %d used %q, want the tags the user typed", i, got)
+		}
 	}
 }
 

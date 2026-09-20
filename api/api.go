@@ -144,6 +144,38 @@ type postCountXML struct {
 	Count   int      `xml:"count,attr"`
 }
 
+type tagCountXML struct {
+	XMLName xml.Name `xml:"tags"`
+	Tags    []struct {
+		Name  string `xml:"name,attr"`
+		Count int    `xml:"count,attr"`
+	} `xml:"tag"`
+}
+
+func simpleTagQuery(tags string) string {
+	tag := strings.TrimSpace(tags)
+	if tag == "" || strings.HasPrefix(tag, "-") {
+		return ""
+	}
+	if strings.ContainsAny(tag, " \t*?%") {
+		return ""
+	}
+	return tag
+}
+
+func parseTagCount(body []byte, tag string) (int, bool) {
+	var payload tagCountXML
+	if err := xml.Unmarshal(body, &payload); err != nil {
+		return 0, false
+	}
+	for _, entry := range payload.Tags {
+		if strings.EqualFold(entry.Name, tag) {
+			return entry.Count, true
+		}
+	}
+	return 0, false
+}
+
 func newHTTPClient() *http.Client {
 	return &http.Client{Timeout: 15 * time.Second}
 }
@@ -370,6 +402,46 @@ func (c *SafebooruClient) Autocomplete(prefix string) ([]string, error) {
 }
 
 func (c *SafebooruClient) CountPosts(tags string) (int, error) {
+	if tag := simpleTagQuery(tags); tag != "" {
+		if count, err := c.tagCount(tag); err == nil {
+			return count, nil
+		}
+	}
+	return c.postCount(tags)
+}
+
+func (c *SafebooruClient) tagCount(tag string) (int, error) {
+	const base = "https://safebooru.org/index.php"
+	q := url.Values{}
+	q.Set("page", "dapi")
+	q.Set("s", "tag")
+	q.Set("q", "index")
+	q.Set("name", tag)
+	req, err := http.NewRequest(http.MethodGet, base+"?"+q.Encode(), nil)
+	if err != nil {
+		return 0, fmt.Errorf("couldn't build request: %w", err)
+	}
+	req.Header.Set("User-Agent", "r34-dl/safebooru-client")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("bad status %d", resp.StatusCode)
+	}
+	body, err := readLimited(resp.Body)
+	if err != nil {
+		return 0, fmt.Errorf("couldn't read response: %w", err)
+	}
+	count, ok := parseTagCount(body, tag)
+	if !ok {
+		return 0, fmt.Errorf("safebooru did not report a post count for %q", tag)
+	}
+	return count, nil
+}
+
+func (c *SafebooruClient) postCount(tags string) (int, error) {
 	const base = "https://safebooru.org/index.php"
 	q := url.Values{}
 	q.Set("page", "dapi")
@@ -520,6 +592,50 @@ func (c *Rule34Client) Ping() error {
 }
 
 func (c *Rule34Client) CountPosts(tags string) (int, error) {
+	if tag := simpleTagQuery(tags); tag != "" {
+		if count, err := c.tagCount(tag); err == nil {
+			return count, nil
+		}
+	}
+	return c.postCount(tags)
+}
+
+func (c *Rule34Client) tagCount(tag string) (int, error) {
+	const base = "https://api.rule34.xxx/index.php"
+	q := url.Values{}
+	q.Set("page", "dapi")
+	q.Set("s", "tag")
+	q.Set("q", "index")
+	q.Set("name", tag)
+	if c.userID != "" && c.apiKey != "" {
+		q.Set("user_id", c.userID)
+		q.Set("api_key", c.apiKey)
+	}
+	req, err := http.NewRequest(http.MethodGet, base+"?"+q.Encode(), nil)
+	if err != nil {
+		return 0, requestError("couldn't build request", err)
+	}
+	req.Header.Set("User-Agent", "r34-dl/rule34-client")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return 0, requestError("request failed", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("bad status %d", resp.StatusCode)
+	}
+	body, err := readLimited(resp.Body)
+	if err != nil {
+		return 0, requestError("couldn't read response", err)
+	}
+	count, ok := parseTagCount(body, tag)
+	if !ok {
+		return 0, fmt.Errorf("rule34 did not report a post count for %q", tag)
+	}
+	return count, nil
+}
+
+func (c *Rule34Client) postCount(tags string) (int, error) {
 	const base = "https://api.rule34.xxx/index.php"
 	q := url.Values{}
 	q.Set("page", "dapi")

@@ -36,39 +36,7 @@ func failureLine(id int, err error) string {
 }
 
 func fetchBulkPosts(client api.Client, query string, want int) ([]api.Post, error) {
-	const (
-		pageSize = 1000
-		maxPages = 20
-	)
-	var all []api.Post
-	seen := make(map[int]bool)
-	for page := 0; page < maxPages && len(all) < want; page++ {
-		posts, err := client.SearchPosts(query, pageSize, page)
-		if err != nil {
-			return all, err
-		}
-		if len(posts) == 0 {
-			break
-		}
-		added := 0
-		for _, post := range posts {
-			if post.ID != 0 {
-				if seen[post.ID] {
-					continue
-				}
-				seen[post.ID] = true
-			}
-			all = append(all, post)
-			added++
-		}
-		if added == 0 {
-			break
-		}
-	}
-	if len(all) > want {
-		all = all[:want]
-	}
-	return all, nil
+	return api.FetchPosts(client, query, want)
 }
 
 func main() {
@@ -78,8 +46,8 @@ func main() {
 	tags := flag.String("tags", "", "search tags (comma-separated)")
 	flag.StringVar(tags, "t", "", "search tags (short)")
 
-	bulk := flag.Bool("bulk", false, "download in bulk")
-	flag.BoolVar(bulk, "b", false, "download in bulk (short)")
+	bulk := flag.Bool("bulk", false, "bulk download mode (asks how many posts to grab)")
+	flag.BoolVar(bulk, "b", false, "bulk download mode (short)")
 
 	limit := flag.Int("limit", 30, "max results to fetch")
 	flag.IntVar(limit, "l", 30, "max results to fetch (short)")
@@ -111,7 +79,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  -h, --help                       show this help message\n")
 		fmt.Fprintf(os.Stderr, "  -v, --version                    print version and commit\n")
 		fmt.Fprintf(os.Stderr, "  -apik, --add-api-key             store rule34 api key (prompt's u to paste ur api key)\n")
-		fmt.Fprintf(os.Stderr, "  -b, --bulk                       download in bulk\n")
+		fmt.Fprintf(os.Stderr, "  -b, --bulk                       bulk download mode (asks how many posts to grab)\n")
 		fmt.Fprintf(os.Stderr, "  -l, --limit <N>                  max results to fetch (default 30)\n")
 		fmt.Fprintf(os.Stderr, "  -t, --tags <tags>                search tags (comma-separated)\n")
 		fmt.Fprintf(os.Stderr, "  --api <site>                     site to use (safebooru, rule34, pornhub, xvideos, xhamster)\n")
@@ -289,7 +257,7 @@ func main() {
 		activeClient = clients["safebooru"]
 	}
 
-	if *bulk {
+	if *bulk && !term.IsTerminal(int(os.Stdin.Fd())) {
 		reader := bufio.NewReader(os.Stdin)
 
 		query := *tags
@@ -336,7 +304,7 @@ func main() {
 		return
 	}
 
-	p := tea.NewProgram(ui.NewModel(clients, cfg, *tags, *limit))
+	p := tea.NewProgram(ui.NewModel(clients, cfg, *tags, *limit).WithBulk(*bulk))
 	if _, err := p.Run(); err != nil {
 		fmt.Println("err!", err)
 		os.Exit(1)

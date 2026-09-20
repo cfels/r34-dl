@@ -94,6 +94,8 @@ func keyByName(name string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyEsc}
 	case "ctrl+a":
 		return tea.KeyMsg{Type: tea.KeyCtrlA}
+	case "ctrl+b":
+		return tea.KeyMsg{Type: tea.KeyCtrlB}
 	case "shift+down":
 		return tea.KeyMsg{Type: tea.KeyShiftDown}
 	case "shift+up":

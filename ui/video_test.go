@@ -101,11 +101,9 @@ func testMediaURL(path string) string {
 func TestMain(m *testing.M) {
 	os.Setenv(safe.AllowPrivateHostsEnv, "1")
 	configDir := ""
-	if os.Getenv("XDG_CONFIG_HOME") == "" {
-		if dir, err := os.MkdirTemp("", "r34-dl-testcfg"); err == nil {
-			configDir = dir
-			os.Setenv("XDG_CONFIG_HOME", dir)
-		}
+	if dir, err := os.MkdirTemp("", "r34-dl-testcfg"); err == nil {
+		configDir = dir
+		os.Setenv("XDG_CONFIG_HOME", dir)
 	}
 	code := m.Run()
 	if root := testMediaRoot(); root != "" {

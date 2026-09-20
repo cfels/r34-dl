@@ -55,8 +55,9 @@ func TestSearchUsesAIFilter(t *testing.T) {
 	if got := h.r34.searched; !reflect.DeepEqual(got, wantSearched) {
 		t.Errorf("searches used %v, want the filter applied then removed", got)
 	}
-	if got := h.r34.counted; !reflect.DeepEqual(got, wantSearched) {
-		t.Errorf("counts used %v, want the filter applied then removed", got)
+	wantCounted := []string{"touhou", "touhou", "touhou"}
+	if got := h.r34.counted; !reflect.DeepEqual(got, wantCounted) {
+		t.Errorf("counts used %v, want %v", got, wantCounted)
 	}
 }
 

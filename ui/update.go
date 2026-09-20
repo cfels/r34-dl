@@ -2,7 +2,11 @@ package ui
 
 import (
 	"fmt"
+	"path/filepath"
+	"strconv"
+	"strings"
 
+	"moxiu/r34-dl/api"
 	"moxiu/r34-dl/conf"
 	"moxiu/r34-dl/safe"
 
@@ -215,6 +219,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, fetchPreview(m.viewerPost)
 				}
 			case "enter":
+				if m.bulkMode {
+					if !m.bulkActive {
+						m.openBulkForm()
+					}
+					return m, nil
+				}
 				if len(m.posts) > 0 {
 					post := m.posts[m.cursor]
 					m.notice = fmt.Sprintf("downloading #%d...", post.ID)
@@ -234,6 +244,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, startBlink()
 			}
 			return m, nil
+
+		case stateBulk:
+			return m.updateBulk(msg)
 
 		case stateViewer:
 			m.viewerImage = ""
@@ -259,6 +272,49 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.notice = noticeStyle.Render("saved → " + safe.Text(msg.path))
 		}
 		return m, nil
+
+	case bulkResultMsg:
+		if !m.bulkActive {
+			return m, nil
+		}
+		if msg.result.Err != nil {
+			m.bulkFailed++
+			m.bulkLastErr = safe.Text(msg.result.Err.Error())
+			m.logBulk(fmt.Sprintf("failed #%d: %s", msg.result.Post.ID, m.bulkLastErr))
+		} else {
+			m.bulkDone++
+			m.bulkLastPath = safe.Text(msg.result.Path)
+			m.logBulk(fmt.Sprintf("saved #%d -> %s", msg.result.Post.ID, m.bulkLastPath))
+		}
+		m.notice = m.bulkNotice(false)
+		return m, nextBulkResult(m.bulkCh)
+
+	case bulkFinishedMsg:
+		if !m.bulkActive {
+			return m, nil
+		}
+		m.bulkActive = false
+		m.bulkCh = nil
+		m.bulkStage = bulkDone
+		m.notice = m.bulkNotice(true)
+		return m, nil
+
+	case bulkPostsMsg:
+		if msg.gen != m.searchGen {
+			return m, nil
+		}
+		if msg.err != nil {
+			m.bulkStage = bulkDone
+			m.logBulk("search failed: " + safe.Text(msg.err.Error()))
+			return m, nil
+		}
+		if len(msg.posts) == 0 {
+			m.bulkStage = bulkDone
+			m.logBulk("no results")
+			return m, nil
+		}
+		m.logBulk(fmt.Sprintf("bulk downloading %d posts...", len(msg.posts)))
+		return m, m.startBulkDownload(msg.posts)
 
 	case imageFetchedMsg:
 		if msg.err != nil {
@@ -365,13 +421,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.gen != m.searchGen {
 			return m, nil
 		}
-		if m.state != stateList {
+		if m.state != stateList && m.state != stateBulk {
 			return m, nil
 		}
-		return m, tea.Batch(
-			doCountTotal(m.client, m.apiTags(), msg.gen),
-			startCountTicker(msg.gen),
-		)
+		cmds := m.countCommands(msg.gen)
+		cmds = append(cmds, startCountTicker(msg.gen))
+		return m, tea.Batch(cmds...)
 
 	case loadMoreMsg:
 		m.loadingMore = false
@@ -410,6 +465,174 @@ func (m *Model) historyBack() tea.Cmd {
 		m.inputCursor = len([]rune(m.query))
 	}
 	return m.refreshSuggestions()
+}
+
+func (m Model) bulkCount() int {
+	count, err := strconv.Atoi(strings.TrimSpace(m.bulkInput))
+	if err != nil || count <= 0 {
+		count = m.limit
+	}
+	if count <= 0 {
+		count = defaultBulkCount
+	}
+	if count > maxBulkPosts {
+		count = maxBulkPosts
+	}
+	return count
+}
+
+func (m *Model) openBulkForm() {
+	m.state = stateBulk
+	m.bulkStage = bulkForm
+	m.bulkTags = strings.TrimSpace(m.query)
+	m.bulkInput = ""
+	m.bulkFocus = 0
+	m.bulkLog = nil
+}
+
+func (m *Model) logBulk(line string) {
+	m.bulkLog = append(m.bulkLog, safe.Text(line))
+	if len(m.bulkLog) > maxBulkLogLines {
+		m.bulkLog = m.bulkLog[len(m.bulkLog)-maxBulkLogLines:]
+	}
+}
+
+func (m *Model) startBulkRun() tea.Cmd {
+	count := m.bulkCount()
+	m.bulkTags = strings.TrimSpace(m.bulkTags)
+	m.bulkStage = bulkRunning
+	m.bulkActive = false
+	m.bulkTotal = 0
+	m.bulkLog = nil
+	m.bulkDone, m.bulkFailed = 0, 0
+	m.bulkLastErr, m.bulkLastPath = "", ""
+	m.logBulk(fmt.Sprintf("searching %s for %q (up to %d posts)", m.cfg.ActiveAPI, safe.Text(m.bulkTags), count))
+	return fetchBulkPostsCmd(m.client, m.bulkQuery(), count, m.searchGen)
+}
+
+func (m Model) updateBulk(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch m.bulkStage {
+	case bulkRunning:
+		if msg.Type == tea.KeyCtrlC {
+			return m, tea.Quit
+		}
+		return m, nil
+	case bulkDone:
+		if msg.Type == tea.KeyCtrlC {
+			return m, tea.Quit
+		}
+		m.state = stateList
+		m.bulkStage = bulkForm
+		return m, nil
+	}
+
+	switch msg.Type {
+	case tea.KeyCtrlC:
+		return m, tea.Quit
+	case tea.KeyEsc:
+		m.state = stateList
+		m.bulkStage = bulkForm
+		return m, nil
+	case tea.KeyTab:
+		m.cycleAPI(1)
+		return m, nil
+	case tea.KeyShiftTab:
+		m.cycleAPI(-1)
+		return m, nil
+	case tea.KeyUp, tea.KeyShiftUp:
+		m.bulkFocus = 0
+		return m, nil
+	case tea.KeyDown, tea.KeyShiftDown:
+		m.bulkFocus = 1
+		return m, nil
+	case tea.KeyEnter:
+		if m.bulkFocus == 0 {
+			m.bulkFocus = 1
+			return m, nil
+		}
+		return m, m.startBulkRun()
+	case tea.KeyBackspace:
+		m.trimBulkField()
+		return m, nil
+	case tea.KeyCtrlU:
+		if m.bulkFocus == 0 {
+			m.bulkTags = ""
+		} else {
+			m.bulkInput = ""
+		}
+		return m, nil
+	case tea.KeySpace:
+		if m.bulkFocus == 0 && len([]rune(m.bulkTags)) < safe.MaxTagRunes {
+			m.bulkTags += " "
+		}
+		return m, nil
+	case tea.KeyRunes:
+		for _, r := range msg.Runes {
+			m.typeBulkRune(r)
+		}
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m *Model) trimBulkField() {
+	if m.bulkFocus == 0 {
+		if runes := []rune(m.bulkTags); len(runes) > 0 {
+			m.bulkTags = string(runes[:len(runes)-1])
+		}
+		return
+	}
+	if runes := []rune(m.bulkInput); len(runes) > 0 {
+		m.bulkInput = string(runes[:len(runes)-1])
+	}
+}
+
+func (m *Model) typeBulkRune(r rune) {
+	if m.bulkFocus == 0 {
+		if len([]rune(m.bulkTags)) >= safe.MaxTagRunes {
+			return
+		}
+		m.bulkTags += string(r)
+		return
+	}
+	if r < '0' || r > '9' || len(m.bulkInput) >= maxBulkDigits {
+		return
+	}
+	m.bulkInput += string(r)
+}
+
+func (m *Model) startBulkDownload(posts []api.Post) tea.Cmd {
+	if m.bulkActive || len(posts) == 0 {
+		return nil
+	}
+	queue := make([]api.Post, len(posts))
+	copy(queue, posts)
+	m.bulkActive = true
+	m.bulkTotal = len(queue)
+	m.bulkDone, m.bulkFailed = 0, 0
+	m.bulkLastErr, m.bulkLastPath = "", ""
+	m.bulkCh = m.downloader.DownloadAll(queue)
+	m.notice = noticeStyle.Render(fmt.Sprintf("bulk downloading %d posts...", len(queue)))
+	return nextBulkResult(m.bulkCh)
+}
+
+func (m Model) bulkNotice(finished bool) string {
+	processed := m.bulkDone + m.bulkFailed
+	label := fmt.Sprintf("bulk %d/%d saved", processed, m.bulkTotal)
+	if finished {
+		label = fmt.Sprintf("bulk done: %d/%d saved", processed, m.bulkTotal)
+	}
+	line := noticeStyle.Render(label)
+	if m.bulkFailed > 0 {
+		line += " " + errorStyle.Render(fmt.Sprintf("· %d failed", m.bulkFailed))
+	}
+	if m.bulkLastErr != "" {
+		return line + dimStyle.Render(" · "+safe.Limit(m.bulkLastErr, bulkNoticeDetail))
+	}
+	if m.bulkLastPath != "" {
+		return line + dimStyle.Render(" · "+safe.Limit(filepath.Base(m.bulkLastPath), bulkNoticeDetail))
+	}
+	return line
 }
 
 func (m *Model) historyForward() tea.Cmd {

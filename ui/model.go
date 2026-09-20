@@ -23,12 +23,26 @@ const (
 	stateViewerLoading
 	stateViewer
 	stateVideoPlaying
+	stateBulk
+)
+
+type bulkStage int
+
+const (
+	bulkForm bulkStage = iota
+	bulkRunning
+	bulkDone
 )
 
 const maxTagsShown = 10
 const suffixReserve = 14
 const countRefreshInterval = 5 * time.Second
 const reservedLines = 4
+const bulkNoticeDetail = 48
+const defaultBulkCount = 30
+const maxBulkPosts = 20000
+const maxBulkDigits = 6
+const maxBulkLogLines = 12
 const aiTag = "ai_generated"
 
 type Model struct {
@@ -55,6 +69,20 @@ type Model struct {
 
 	state      state
 	downloader *dl.Downloader
+
+	bulkActive   bool
+	bulkMode     bool
+	bulkStage    bulkStage
+	bulkTags     string
+	bulkInput    string
+	bulkFocus    int
+	bulkLog      []string
+	bulkCh       <-chan dl.Result
+	bulkTotal    int
+	bulkDone     int
+	bulkFailed   int
+	bulkLastErr  string
+	bulkLastPath string
 
 	viewerPost    api.Post
 	viewerErr     string
@@ -87,9 +115,13 @@ type Model struct {
 func (m Model) Cfg() conf.Config { return m.cfg }
 
 func (m Model) apiTags() string {
+	return m.tagsFor(m.query)
+}
+
+func (m Model) tagsFor(query string) string {
 	parts := make([]string, 0, 2+len(m.cfg.Blacklist))
-	if query := strings.TrimSpace(m.query); query != "" {
-		parts = append(parts, query)
+	if tags := strings.TrimSpace(query); tags != "" {
+		parts = append(parts, tags)
 	}
 	if m.aiFilterOn() {
 		parts = append(parts, "-"+aiTag)
@@ -101,6 +133,14 @@ func (m Model) apiTags() string {
 		parts = append(parts, "-"+tag)
 	}
 	return strings.Join(parts, " ")
+}
+
+func (m Model) bulkQuery() string {
+	return m.tagsFor(m.bulkTags)
+}
+
+func (m Model) rawTags() string {
+	return strings.TrimSpace(m.query)
 }
 
 func (m Model) blacklistTags() []string {
@@ -173,16 +213,19 @@ func activeClient(clients map[string]api.Client, cfg conf.Config) api.Client {
 	return api.NewSafebooruClient()
 }
 
+func (m Model) WithBulk(on bool) Model {
+	m.bulkMode = on
+	return m
+}
+
 func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{tea.ClearScreen}
 	switch {
 	case m.state == stateSearching:
 		gen := m.searchGen
-		cmds = append(cmds,
-			doSearch(m.client, m.apiTags(), m.limit, 0),
-			doCountTotal(m.client, m.apiTags(), gen),
-			startCountTicker(gen),
-		)
+		cmds = append(cmds, doSearch(m.client, m.apiTags(), m.limit, 0))
+		cmds = append(cmds, m.countCommands(gen)...)
+		cmds = append(cmds, startCountTicker(gen))
 	case m.state == stateSearch:
 		cmds = append(cmds, startBlink())
 	}
@@ -286,11 +329,10 @@ func (m *Model) startSearch() tea.Cmd {
 	m.noMore = false
 	m.totalKnown = false
 	m.totalCount = 0
-	return tea.Batch(
-		doSearch(m.client, m.apiTags(), m.limit, 0),
-		doCountTotal(m.client, m.apiTags(), gen),
-		startCountTicker(gen),
-	)
+	cmds := []tea.Cmd{doSearch(m.client, m.apiTags(), m.limit, 0)}
+	cmds = append(cmds, m.countCommands(gen)...)
+	cmds = append(cmds, startCountTicker(gen))
+	return tea.Batch(cmds...)
 }
 
 func (m *Model) stopVideo() {

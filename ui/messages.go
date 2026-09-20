@@ -36,6 +36,18 @@ type countTickMsg struct {
 	gen int
 }
 
+type bulkResultMsg struct {
+	result dl.Result
+}
+
+type bulkFinishedMsg struct{}
+
+type bulkPostsMsg struct {
+	posts []api.Post
+	err   error
+	gen   int
+}
+
 type imageFetchedMsg struct {
 	data []byte
 	err  error
@@ -87,6 +99,31 @@ func doCountTotal(client api.Client, query string, gen int) tea.Cmd {
 	return func() tea.Msg {
 		count, err := client.CountPosts(query)
 		return totalCountMsg{count: count, err: err, gen: gen}
+	}
+}
+
+func (m Model) countCommands(gen int) []tea.Cmd {
+	query := m.rawTags()
+	if query == "" {
+		query = m.apiTags()
+	}
+	return []tea.Cmd{doCountTotal(m.client, query, gen)}
+}
+
+func nextBulkResult(results <-chan dl.Result) tea.Cmd {
+	return func() tea.Msg {
+		result, ok := <-results
+		if !ok {
+			return bulkFinishedMsg{}
+		}
+		return bulkResultMsg{result: result}
+	}
+}
+
+func fetchBulkPostsCmd(client api.Client, query string, want, gen int) tea.Cmd {
+	return func() tea.Msg {
+		posts, err := api.FetchPosts(client, query, want)
+		return bulkPostsMsg{posts: posts, err: err, gen: gen}
 	}
 }
 
