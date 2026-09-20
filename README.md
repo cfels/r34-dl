@@ -39,7 +39,7 @@ kitty
 ffmpeg
 ```
 
-### Donwloading
+### Downloading
 you can download pre-built binary from [Release's](https://github.com/cfels/r34-dl/releases) <br>
 or if u feeling like getting the latest dev build then download it off the TG channel: [t.me/r34_dl](https://t.me/r34_dl)
 
@@ -71,21 +71,6 @@ Options:
   -blc, --blacklist-clear          clear the tag blacklist
   --run-tests                      run tests
 ```
-
-### Tag blacklist
-`./r34-dl -bl "scat,big breasts"` stores those tags in ur config and every search hides them (sent as `-scat -big_breasts`, so it work's on `safebooru` and `rule34`, the video site's search engine's don't take negative tag's),
-tag's u type with space's get stored with `_`, and prefixing a tag with `-` (like `-bl "-scat"`) remove's it from the blacklist, `-blc` wipe's the whole list, and the search screen show's the active blacklist under the tag input
-
-### Bulk downloads
-`-b` start's bulk mode: `./r34-dl -b` open's the normal browser but the result's screen show's a `[bulk]` tag next to the site label,
-in bulk mode `enter` open's the bulk screen: ur tag's are pre-filled, u can edit them or `tab` to another site (same switcher as the search screen) and set how many post's u want (empty = ur result page size, so `-l 50` mean's 50),
-`enter` on the count start's the download: it walk's the result page's until it has that many post's and save's them with the same downloader the plain `-b` CLI flow use's, and the screen show's every line the old flow printed (`saved #123 -> path`, `failed #124: ...`, `done: X saved, Y failed`),
-that screen wait's for every download to finish before it let's u go back (any key after it's done), so a `q` in the middle just get's ignored,
-when stdin isnt a terminal (so script's and pipe's keep working) `-b` stay's the CLI flow and ask's for the tag's + the count in the terminal
-
-### Result counter
-the counter under the result's is `[where u are / what the website show's]`, so `remielle_dan` show's `[30/2789]` and `jane_doe_(zenless_zone_zero)` show's `[30/9810]` (`safebooru` and `rule34` ask their tag endpoint for the tag's post count, the video site's read the count their search page print's),
-combining tag's count's the combined total from the post endpoint (`remielle_dan video` = `151`), and the AI filter/blacklist only change what u browse, never that number
 
 ### Obatining API key
 Here's how to get one
