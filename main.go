@@ -289,7 +289,7 @@ func main() {
 			return
 		}
 		fmt.Printf("bulk downloading %d posts...\n", len(posts))
-		d := dl.New("downloads", 4)
+		d := dl.New("r34-dl_downloads", 4)
 		done, failed := 0, 0
 		for r := range d.DownloadAll(posts) {
 			if r.Err != nil {
