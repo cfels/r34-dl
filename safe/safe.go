@@ -180,7 +180,7 @@ func MediaURL(raw string) bool {
 	default:
 		return false
 	}
-	return parsed.Host != "" && parsed.User == nil
+	return parsed.Hostname() != "" && parsed.User == nil && !strings.ContainsAny(parsed.Hostname(), "%\\")
 }
 
 func PublicMediaURL(raw string) bool {
@@ -199,7 +199,7 @@ func PublicMediaURL(raw string) bool {
 	}
 	ips, err := net.LookupIP(host)
 	if err != nil || len(ips) == 0 {
-		return true
+		return false
 	}
 	for _, ip := range ips {
 		if !publicIP(ip) {

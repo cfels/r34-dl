@@ -25,7 +25,7 @@ import (
 const (
 	videoUserAgent = "r34-dl/viewer"
 
-	mediaProtocolWhitelist = "http,https,tcp,tls,crypto"
+	mediaProtocolWhitelist = api.MediaProtocols
 	mediaReadTimeout       = "60000000"
 
 	videoProbeTimeout = 4 * time.Second
@@ -64,10 +64,11 @@ type videoPlayer struct {
 	stdout io.ReadCloser
 	stderr bytes.Buffer
 
-	width   int
-	height  int
-	source  string
-	headers string
+	width  int
+	height int
+	source string
+	proxy  string
+	relay  *api.MediaRelay
 
 	frames chan image.Image
 	done   chan struct{}
@@ -121,18 +122,6 @@ func videoFitSize(termCols, termRows, srcW, srcH int) (int, int) {
 	return w, h
 }
 
-func streamHeaders(stream api.Stream, site string) string {
-	var headers strings.Builder
-	allowedHost := api.MediaHostAllowed(site, stream.URL)
-	if stream.Cookie != "" && allowedHost {
-		fmt.Fprintf(&headers, "Cookie: %s\r\n", stream.Cookie)
-	}
-	if stream.Referer != "" && allowedHost {
-		fmt.Fprintf(&headers, "Referer: %s\r\n", stream.Referer)
-	}
-	return headers.String()
-}
-
 func startVideoPlayer(post api.Post, termCols, termRows int, opts videoOptions) (*videoPlayer, error) {
 	stream, err := api.Media(post)
 	if err != nil {
@@ -145,11 +134,11 @@ func startVideoPlayer(post api.Post, termCols, termRows int, opts videoOptions) 
 }
 
 func startStreamPlayer(stream api.Stream, post api.Post, termCols, termRows int, opts videoOptions) (*videoPlayer, error) {
-	rawURL := stream.URL
-	if !safe.MediaURL(rawURL) {
-		return nil, fmt.Errorf("refusing to play unsupported media url for post %d", post.ID)
+	relay, err := api.NewMediaRelay(stream, post.Site)
+	if err != nil {
+		return nil, err
 	}
-	headers := streamHeaders(stream, post.Site)
+	rawURL := relay.URL
 	srcW, srcH := post.Width, post.Height
 	w, h := videoFitSize(termCols, termRows, srcW, srcH)
 	scale := fmt.Sprintf(
@@ -164,11 +153,9 @@ func startStreamPlayer(stream api.Stream, post api.Post, termCols, termRows int,
 		"-nostdin",
 		"-re",
 	)
+	cmd.Env = api.MediaEnv()
 	if isHTTP(rawURL) {
-		cmd.Args = append(cmd.Args, "-user_agent", videoUserAgent)
-		if headers != "" {
-			cmd.Args = append(cmd.Args, "-headers", headers)
-		}
+		cmd.Args = append(cmd.Args, "-user_agent", videoUserAgent, "-http_proxy", relay.Proxy)
 	}
 	if isGIFURL(rawURL) || strings.EqualFold(filepath.Ext(post.Image), ".gif") {
 		cmd.Args = append(cmd.Args, "-stream_loop", "-1")
@@ -184,34 +171,38 @@ func startStreamPlayer(stream api.Stream, post api.Post, termCols, termRows int,
 		"-",
 	)
 	vp := &videoPlayer{
-		cmd:     cmd,
-		width:   w,
-		height:  h,
-		source:  rawURL,
-		headers: headers,
-		muted:   !opts.audio,
-		frames:  make(chan image.Image, 1),
-		done:    make(chan struct{}),
+		cmd:    cmd,
+		width:  w,
+		height: h,
+		source: rawURL,
+		proxy:  relay.Proxy,
+		relay:  relay,
+		muted:  !opts.audio,
+		frames: make(chan image.Image, 1),
+		done:   make(chan struct{}),
 	}
 	cmd.Stderr = &vp.stderr
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		relay.Close()
 		return nil, err
 	}
 	vp.stdout = stdout
 	if err := cmd.Start(); err != nil {
+		stdout.Close()
+		relay.Close()
 		if errors.Is(err, exec.ErrNotFound) {
 			return nil, errors.New("ffmpeg not found, install it to play videos")
 		}
 		return nil, err
 	}
 	go vp.readFrames()
-	go vp.probeFramerate(rawURL, headers)
+	go vp.probeFramerate(rawURL, relay.Proxy)
 	return vp, nil
 }
 
-func (vp *videoPlayer) probeFramerate(rawURL, headers string) {
-	info := probeSource(rawURL, headers)
+func (vp *videoPlayer) probeFramerate(rawURL, proxy string) {
+	info := probeSource(rawURL, proxy)
 	if info.fps <= 0 {
 		return
 	}
@@ -251,14 +242,14 @@ var (
 	probeSourceFn = probeStream
 )
 
-func probeSource(rawURL, headers string) sourceInfo {
+func probeSource(rawURL, proxy string) sourceInfo {
 	probeSourceMu.Lock()
 	fn := probeSourceFn
 	probeSourceMu.Unlock()
-	return fn(rawURL, headers)
+	return fn(rawURL, proxy)
 }
 
-func probeStream(rawURL, headers string) sourceInfo {
+func probeStream(rawURL, proxy string) sourceInfo {
 	ctx, cancel := context.WithTimeout(context.Background(), videoProbeTimeout)
 	defer cancel()
 	args := []string{
@@ -271,12 +262,14 @@ func probeStream(rawURL, headers string) sourceInfo {
 	}
 	if isHTTP(rawURL) {
 		args = append(args, "-user_agent", videoUserAgent)
-		if headers != "" {
-			args = append(args, "-headers", headers)
+		if proxy != "" {
+			args = append(args, "-http_proxy", proxy)
 		}
 	}
 	args = append(args, rawURL)
-	out, err := exec.CommandContext(ctx, "ffprobe", args...).Output()
+	cmd := exec.CommandContext(ctx, "ffprobe", args...)
+	cmd.Env = api.MediaEnv()
+	out, err := cmd.Output()
 	if err != nil {
 		return sourceInfo{}
 	}
@@ -336,6 +329,7 @@ func parseRate(s string) (float64, bool) {
 
 func (vp *videoPlayer) readFrames() {
 	defer close(vp.frames)
+	defer vp.relay.Close()
 	stride := vp.width * 4
 	started := false
 	for {
@@ -399,7 +393,7 @@ func ffmpegAccepts(args ...string) bool {
 	return cmd.Run() == nil
 }
 
-func spawnAudio(rawURL, headers string) *exec.Cmd {
+func spawnAudio(rawURL, proxy string) *exec.Cmd {
 	path, err := exec.LookPath("ffplay")
 	if err != nil {
 		return nil
@@ -410,11 +404,12 @@ func spawnAudio(rawURL, headers string) *exec.Cmd {
 	args = append(args, "-rw_timeout", mediaReadTimeout)
 	if isHTTP(rawURL) {
 		args = append(args, "-user_agent", videoUserAgent)
-		if headers != "" {
-			args = append(args, "-headers", headers)
+		if proxy != "" {
+			args = append(args, "-http_proxy", proxy)
 		}
 	}
 	cmd := exec.Command(path, append(args, rawURL)...)
+	cmd.Env = api.MediaEnv()
 	cmd.Stdin = nil
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
@@ -431,7 +426,7 @@ func (vp *videoPlayer) startAudio() {
 		if vp.muted || vp.source == "" {
 			return
 		}
-		vp.audio = spawnAudio(vp.source, vp.headers)
+		vp.audio = spawnAudio(vp.source, vp.proxy)
 	})
 }
 
@@ -442,7 +437,7 @@ func (vp *videoPlayer) toggleMute() {
 	if vp.muted {
 		vp.muted = false
 		if vp.source != "" {
-			vp.audio = spawnAudio(vp.source, vp.headers)
+			vp.audio = spawnAudio(vp.source, vp.proxy)
 		}
 		return
 	}
@@ -509,6 +504,9 @@ func (vp *videoPlayer) stop() {
 		if vp.cmd != nil && vp.cmd.Process != nil {
 			_ = vp.cmd.Process.Kill()
 		}
+		if vp.relay != nil {
+			vp.relay.Close()
+		}
 	})
 	if vp.cmd != nil {
 		vp.wait()
@@ -553,11 +551,8 @@ func nextFrame(vp *videoPlayer) tea.Cmd {
 	}
 }
 
-func videoFrameView(frame, status string) string {
-	if !strings.HasPrefix(frame, kittyGraphicsPrefix) {
-		return frame + "\n" + status
-	}
-	return status + "\n" + strings.TrimSuffix(frame, "\n")
+func previewFrameView(frame, status string) string {
+	return status + "\n\n" + strings.TrimSuffix(frame, "\n")
 }
 
 func renderVideoFrame(vp *videoPlayer, img image.Image, termCols, termRows int) tea.Cmd {

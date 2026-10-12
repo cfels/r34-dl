@@ -8,6 +8,7 @@ import (
 	"moxiu/r34-dl/safe"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 var (
@@ -325,10 +326,10 @@ func (m Model) View() string {
 		if fps := m.video.fpsLabel(); fps != "" {
 			line += "  " + fps
 		}
-		line += fmt.Sprintf("  %s  ·  m: toggle audio  ·  any key: stop", audio)
-		status := dimStyle.Render(line)
+		line += "  " + audio
+		status := m.previewStatus(line, "any key: stop · m: toggle audio")
 		if m.videoFrame != "" {
-			return videoFrameView(m.videoFrame, status)
+			return previewFrameView(m.videoFrame, status)
 		}
 		return "\n" + status
 
@@ -336,17 +337,23 @@ func (m Model) View() string {
 		if m.viewerErr != "" {
 			return errorStyle.Render(safe.Text(m.viewerErr)) + "\n\n" + dimStyle.Render("any key: back")
 		}
-		status := "\n" + dimStyle.Render(fmt.Sprintf(
-			"#%d  %s  any key / space: back",
+		status := m.previewStatus(fmt.Sprintf(
+			"#%d  %s",
 			m.viewerPost.ID, postSize(m.viewerPost),
-		))
+		), "any key: back")
 		if m.viewerImage != "" {
-			return m.viewerImage + status
+			return previewFrameView(m.viewerImage, status)
 		}
 		return status
 
 	}
 	return ""
+}
+
+func (m Model) previewStatus(details, controls string) string {
+	width := max(1, m.width)
+	return dimStyle.Render(ansi.Truncate(details, width, "…")) + "\n" +
+		dimStyle.Render(ansi.Truncate(controls, width, "…"))
 }
 
 func (m Model) bulkFieldValue(value string, focused bool) string {

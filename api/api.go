@@ -5,6 +5,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -177,7 +178,23 @@ func parseTagCount(body []byte, tag string) (int, bool) {
 }
 
 func newHTTPClient() *http.Client {
-	return &http.Client{Timeout: 15 * time.Second}
+	return &http.Client{
+		Timeout: 15 * time.Second,
+		Transport: &http.Transport{
+			Proxy:               http.ProxyFromEnvironment,
+			DialContext:         safe.PublicDialContext(&net.Dialer{Timeout: 15 * time.Second}),
+			TLSHandshakeTimeout: 15 * time.Second,
+		},
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return fmt.Errorf("stopped after 10 redirects")
+			}
+			if req.URL.Scheme != via[0].URL.Scheme || req.URL.Host != via[0].URL.Host {
+				return fmt.Errorf("refusing API redirect outside the original origin")
+			}
+			return nil
+		},
+	}
 }
 
 func readLimited(body io.Reader) ([]byte, error) {

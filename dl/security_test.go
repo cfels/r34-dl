@@ -1,7 +1,6 @@
 package dl
 
 import (
-	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -105,6 +104,27 @@ func TestDownloadFileKeepsCookieOnSite(t *testing.T) {
 	}
 }
 
+func TestDownloadRedirectDropsSensitiveHeaders(t *testing.T) {
+	t.Setenv(safe.AllowPrivateHostsEnv, "1")
+	client := newHTTPClient()
+	req, err := http.NewRequest(http.MethodGet, "https://other.phncdn.com/video.mp4", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Cookie", "session=secret")
+	req.Header.Set("Referer", "https://www.pornhub.com/video")
+	initial, err := http.NewRequest(http.MethodGet, "https://ev-h.phncdn.com/video.mp4", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.CheckRedirect(req, []*http.Request{initial}); err != nil {
+		t.Fatal(err)
+	}
+	if req.Header.Get("Cookie") != "" || req.Header.Get("Referer") != "" {
+		t.Fatal("redirect retained sensitive headers")
+	}
+}
+
 func TestDownloadOneRejectsPrivateHosts(t *testing.T) {
 	if safe.AllowPrivateHosts() {
 		t.Skipf("%s is set, private hosts are allowed in this environment", safe.AllowPrivateHostsEnv)
@@ -148,38 +168,6 @@ func TestDownloadFileEnforcesSizeLimit(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Errorf("temp files left behind: %v", entries)
-	}
-}
-
-func TestPartNamesAreUnique(t *testing.T) {
-	seen := map[string]bool{}
-	for i := 0; i < 32; i++ {
-		name := partName("/tmp/out/1_1.mp4", true)
-		if seen[name] {
-			t.Fatalf("partName repeated %q", name)
-		}
-		seen[name] = true
-		if !strings.HasSuffix(name, ".mp4") {
-			t.Errorf("partName %q dropped the extension ffmpeg needs", name)
-		}
-	}
-}
-
-func TestPartNameSurvivesRandomFailure(t *testing.T) {
-	restore := randRead
-	randRead = func([]byte) (int, error) { return 0, errors.New("no entropy") }
-	defer func() { randRead = restore }()
-
-	first := partName("/tmp/out/1_1.mp4", true)
-	second := partName("/tmp/out/1_1.mp4", true)
-	if first == "" || !strings.HasSuffix(first, ".mp4") {
-		t.Errorf("partName = %q, want a usable name", first)
-	}
-	if !strings.Contains(first, ".part-") {
-		t.Errorf("partName = %q, want the part suffix", first)
-	}
-	if first != second && !strings.HasSuffix(second, ".mp4") {
-		t.Errorf("second partName = %q, want a usable name", second)
 	}
 }
 
@@ -250,26 +238,23 @@ func TestDownloadOneRejectsNonMediaSchemes(t *testing.T) {
 }
 
 func TestHLSArgsWhitelistsProtocols(t *testing.T) {
-	stream := api.Stream{
-		URL:     "https://ev-h.phncdn.com/hls/1.m3u8",
-		Cookie:  "session=abc",
-		Referer: "https://www.pornhub.com/view_video.php?viewkey=1",
-	}
-	args := hlsArgs(stream, api.Post{ID: 1, Site: "pornhub", Video: true}, "/tmp/out.part.mp4")
+	args := hlsArgs("http://127.0.0.1:12345/token/0.m3u8", "http://127.0.0.1:12345", "/tmp/out.part.mp4")
 	joined := strings.Join(args, " ")
 	if !strings.Contains(joined, "-protocol_whitelist "+mediaProtocolWhitelist) {
 		t.Errorf("hls args missing protocol whitelist: %s", joined)
 	}
-	if strings.Contains(mediaProtocolWhitelist, "file") || strings.Contains(mediaProtocolWhitelist, "concat") {
-		t.Errorf("protocol whitelist %q allows local protocols", mediaProtocolWhitelist)
+	for _, protocol := range []string{"file", "concat", "https", "tls"} {
+		if strings.Contains(mediaProtocolWhitelist, protocol) {
+			t.Errorf("protocol whitelist allows bypassing the relay: %q", mediaProtocolWhitelist)
+		}
+	}
+	if !strings.Contains(joined, "-http_proxy http://127.0.0.1:12345") {
+		t.Error("HLS requests must go through the media relay")
 	}
 	if args[len(args)-1] != "/tmp/out.part.mp4" {
 		t.Errorf("output must be the last argument: %s", joined)
 	}
-	offSite := stream
-	offSite.URL = "https://evil.example/hls/1.m3u8"
-	args = hlsArgs(offSite, api.Post{ID: 1, Site: "pornhub", Video: true}, "/tmp/out.part.mp4")
-	if strings.Contains(strings.Join(args, " "), "session=abc") {
-		t.Errorf("hls args leaked the cookie off-site: %s", strings.Join(args, " "))
+	if !strings.Contains(joined, "-fs ") {
+		t.Error("HLS downloads must enforce the size limit")
 	}
 }

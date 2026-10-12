@@ -231,6 +231,8 @@ func TestPublicMediaURLBlocksInternalTargets(t *testing.T) {
 		"http://[fd00::1]/x.mp4",
 		"file:///etc/passwd",
 		"concat:/etc/passwd",
+		"http://[fe80::1%25eth0]/x.mp4",
+		"https://host.invalid/x.mp4",
 	}
 	for _, raw := range blocked {
 		if PublicMediaURL(raw) {

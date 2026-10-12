@@ -19,6 +19,7 @@ import (
 	"moxiu/r34-dl/safe"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 type stubClient struct{}
@@ -340,22 +341,22 @@ func TestVideoFrameViewKeepsFrameLast(t *testing.T) {
 	if !strings.Contains(frame, kittyGraphicsPrefix) {
 		t.Skip("terminal graphics encoder is not kitty")
 	}
-	view := videoFrameView(frame, "status")
+	view := previewFrameView(frame, "status")
 	body := strings.TrimSuffix(frame, "\n")
 	if !strings.HasSuffix(view, body) {
 		t.Error("view must draw the frame last")
 	}
-	if !strings.HasPrefix(view, "status\n") {
+	if !strings.HasPrefix(view, "status\n\n") {
 		t.Error("view must show the status line above the frame")
 	}
-	if head := strings.TrimSuffix(view, body); strings.Count(head, "\n") != 1 {
-		t.Errorf("header %q must be one status line, anything below the frame scrolls it away", head)
+	if head := strings.TrimSuffix(view, body); strings.Count(head, "\n") != 2 {
+		t.Errorf("header %q must reserve a blank line above the frame", head)
 	}
 }
 
 func TestVideoFrameViewKeepsTextLayoutForOtherEncoders(t *testing.T) {
-	if got := videoFrameView("image\n", "status"); got != "image\n\nstatus" {
-		t.Errorf("text layout = %q, want %q", got, "image\n\nstatus")
+	if got := previewFrameView("image\n", "status"); got != "status\n\nimage" {
+		t.Errorf("text layout = %q, want %q", got, "status\n\nimage")
 	}
 }
 
@@ -385,6 +386,53 @@ func TestVideoFitHasNoLetterbox(t *testing.T) {
 	}
 	if w%2 != 0 || h%2 != 0 {
 		t.Errorf("fit %dx%d must stay even for the scale/pad chain", w, h)
+	}
+}
+
+func TestPortraitPreviewsKeepControlsOutsideMedia(t *testing.T) {
+	kittyAvailable(t)
+	for _, term := range []struct{ cols, rows int }{{80, 24}, {40, 12}, {20, 8}, {120, 40}} {
+		m := newListModel()
+		m.width, m.height = term.cols, term.rows
+		m.viewerPost = api.Post{ID: 1, Width: 600, Height: 1800}
+		cols, rows := imageBox(term.cols, term.rows)
+		img := scaleToFit(testGradient(60, 180), cols, rows)
+		encoded, err := encodeImage(img)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m.state, m.viewerImage = stateViewer, encoded
+		view := m.View()
+		if strings.Index(view, "back") < 0 || strings.Index(view, "back") > strings.Index(view, kittyGraphicsPrefix) {
+			t.Error("image covers the back control")
+		}
+		w, h := videoFitSize(term.cols, term.rows, 600, 1800)
+		m.state = stateVideoPlaying
+		m.videoFrame, err = encodeVideoFrame(image.NewRGBA(image.Rect(0, 0, w, h)), 1, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, frame := range []string{m.viewerImage, m.videoFrame} {
+			first, _, _ := kittyPayload(t, frame)
+			placementRows := 0
+			for _, key := range strings.Split(first, ",") {
+				if strings.HasPrefix(key, "r=") {
+					placementRows, _ = strconv.Atoi(strings.TrimPrefix(key, "r="))
+				}
+			}
+			if placementRows < 1 || placementRows+previewHeaderRows >= term.rows {
+				t.Errorf("portrait placement %d rows overlaps controls in %dx%d", placementRows, term.cols, term.rows)
+			}
+			if !strings.Contains(first, "C=1") {
+				t.Error("graphics command moves the cursor into the media")
+			}
+		}
+		status := strings.Split(m.View(), kittyGraphicsPrefix)[0]
+		for _, line := range strings.Split(status, "\n") {
+			if lipgloss.Width(line) > term.cols {
+				t.Errorf("preview header wraps in %dx%d: %q", term.cols, term.rows, line)
+			}
+		}
 	}
 }
 

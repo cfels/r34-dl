@@ -19,6 +19,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.clampViewport()
+		if m.state == stateViewer && len(m.viewerData) > 0 {
+			m.viewerImage = ""
+			return m, tea.Sequence(tea.ClearScreen, renderImage(m.viewerData, m.width, m.height))
+		}
+		if m.state == stateVideoPlaying {
+			m.videoFrame = ""
+			return m, tea.ClearScreen
+		}
 		return m, nil
 
 	case releaseInfoMsg:
@@ -200,6 +208,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.viewerPost = m.posts[m.cursor]
 					m.viewerErr = ""
 					m.viewerImage = ""
+					m.viewerData = nil
 					if isVideo(m.viewerPost) {
 						m.state = stateViewerLoading
 						post := m.viewerPost
@@ -250,6 +259,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case stateViewer:
 			m.viewerImage = ""
+			m.viewerData = nil
 			m.state = stateList
 			return m, tea.ClearScreen
 
@@ -317,11 +327,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.startBulkDownload(msg.posts)
 
 	case imageFetchedMsg:
+		if m.state != stateViewerLoading {
+			return m, nil
+		}
 		if msg.err != nil {
 			m.viewerErr = safe.Text(msg.err.Error())
 			m.state = stateViewer
 			return m, nil
 		}
+		m.viewerData = msg.data
 		return m, renderImage(msg.data, m.width, m.height)
 
 	case suggestTickMsg:
@@ -343,9 +357,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case imageRenderedMsg:
-		if m.state == stateVideoPlaying {
-			m.videoFrame = msg.s
-		} else {
+		if m.state == stateViewerLoading || m.state == stateViewer {
 			m.viewerImage = msg.s
 			m.state = stateViewer
 		}

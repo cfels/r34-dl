@@ -87,6 +87,7 @@ type Model struct {
 	viewerPost    api.Post
 	viewerErr     string
 	viewerImage   string
+	viewerData    []byte
 	videoFrame    string
 	video         *videoPlayer
 	ageGateCursor int

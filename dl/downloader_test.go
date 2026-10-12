@@ -4,17 +4,62 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"moxiu/r34-dl/api"
+	"moxiu/r34-dl/safe"
 )
 
 type stubTransport struct {
 	status int
 	body   string
+}
+
+func TestHLSDownloadThroughRelay(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg not installed")
+	}
+	t.Setenv(safe.AllowPrivateHostsEnv, "1")
+	dir := t.TempDir()
+	playlist := filepath.Join(dir, "video.m3u8")
+	cmd := exec.Command("ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=30:duration=2", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "0", "-f", "hls", "-hls_time", "1", playlist)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("generate HLS fixture: %v: %s", err, out)
+	}
+	server := httptest.NewServer(http.FileServer(http.Dir(dir)))
+	defer server.Close()
+	post := api.Post{ID: 1, Video: true}
+	stream := api.Stream{URL: server.URL + "/video.m3u8"}
+	for _, limit := range []string{"0", "1"} {
+		t.Run("limit_"+limit, func(t *testing.T) {
+			t.Setenv(maxDownloadMBEnv, limit)
+			outDir := t.TempDir()
+			outPath := filepath.Join(outDir, "video.mp4")
+			result := New(outDir, 1).downloadHLS(post, stream, outPath)
+			if limit == "0" {
+				if result.Err != nil {
+					t.Fatalf("HLS download: %v", result.Err)
+				}
+				info, err := os.Stat(outPath)
+				if err != nil || info.Size() < 1<<20 {
+					t.Fatalf("HLS output missing or too small: %v", err)
+				}
+			} else {
+				if result.Err == nil || !strings.Contains(result.Err.Error(), "limit") {
+					t.Fatalf("oversized HLS download: %v", result.Err)
+				}
+				entries, err := os.ReadDir(outDir)
+				if err != nil || len(entries) != 0 {
+					t.Fatalf("failed HLS download left files: %v, %v", entries, err)
+				}
+			}
+		})
+	}
 }
 
 func (s stubTransport) RoundTrip(req *http.Request) (*http.Response, error) {

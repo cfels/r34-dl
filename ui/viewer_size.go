@@ -3,8 +3,9 @@ package ui
 import "math"
 
 const (
-	cellW = 8
-	cellH = 21
+	cellW             = 8
+	cellH             = 21
+	previewHeaderRows = 3
 )
 
 const (
@@ -46,7 +47,7 @@ func previewRows(termRows int) int {
 	if rows < previewMinRows {
 		rows = previewMinRows
 	}
-	if limit := termRows - 2; rows > limit {
+	if limit := termRows - previewHeaderRows - 1; rows > limit {
 		rows = limit
 	}
 	if rows < 4 {
@@ -61,7 +62,7 @@ func videoBox(termCols, termRows int) (int, int) {
 	if limit := termCols - 2; cols > limit {
 		cols = limit
 	}
-	if limit := termRows - 2; rows > limit {
+	if limit := termRows - previewHeaderRows - 1; rows > limit {
 		rows = limit
 	}
 	if cols < 2 {
@@ -79,7 +80,7 @@ func imageBox(termCols, termRows int) (int, int) {
 	if limit := termCols - 2; cols > limit {
 		cols = limit
 	}
-	if limit := termRows - 2; rows > limit {
+	if limit := termRows - previewHeaderRows - 1; rows > limit {
 		rows = limit
 	}
 	if cols < 2 {

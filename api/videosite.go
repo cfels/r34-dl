@@ -146,7 +146,23 @@ func newSiteHTTPClient() *http.Client {
 		ForceAttemptHTTP2:     false,
 		TLSNextProto:          map[string]func(string, *tls.Conn) http.RoundTripper{},
 	}
-	return &http.Client{Timeout: streamTimeout, Transport: transport}
+	return &http.Client{
+		Timeout:   streamTimeout,
+		Transport: transport,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return fmt.Errorf("stopped after 10 redirects")
+			}
+			if !safe.PublicMediaURL(req.URL.String()) {
+				return fmt.Errorf("refusing non-public site redirect")
+			}
+			if req.URL.Host != via[0].URL.Host || req.URL.Scheme != via[0].URL.Scheme {
+				req.Header.Del("Cookie")
+				req.Header.Del("Referer")
+			}
+			return nil
+		},
+	}
 }
 
 func NewPornHubClient() *PornHubClient   { return sharedPornHub }
@@ -158,6 +174,9 @@ func siteGet(client *http.Client, rawURL string) ([]byte, error) {
 }
 
 func siteGetRef(client *http.Client, rawURL, referer string) ([]byte, error) {
+	if !safe.PublicMediaURL(rawURL) {
+		return nil, fmt.Errorf("refusing unsupported or non-public site URL")
+	}
 	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("couldn't build request: %w", err)
@@ -184,6 +203,9 @@ func siteGetRef(client *http.Client, rawURL, referer string) ([]byte, error) {
 }
 
 func siteGetJSON(client *http.Client, rawURL, referer string) ([]byte, int, error) {
+	if !safe.PublicMediaURL(rawURL) {
+		return nil, 0, fmt.Errorf("refusing unsupported or non-public site URL")
+	}
 	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, 0, fmt.Errorf("couldn't build request: %w", err)
@@ -626,6 +648,9 @@ func resolveReference(base, reference string) string {
 }
 
 func segmentReachable(client *http.Client, segmentURL, referer string) bool {
+	if !safe.PublicMediaURL(segmentURL) {
+		return false
+	}
 	req, err := http.NewRequest(http.MethodGet, segmentURL, nil)
 	if err != nil {
 		return false

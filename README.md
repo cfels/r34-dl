@@ -47,6 +47,8 @@ you can download pre-built binary from [Release's](https://github.com/cfels/r34-
 or if u feeling like getting the latest dev build then download it off the TG channel: [t.me/r34_dl](https://t.me/r34_dl)
 
 ### Building
+Requires Go 1.26.9 or newer.
+
 ```
 go get
 go build

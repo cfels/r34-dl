@@ -59,8 +59,10 @@ func previewTooLarge(format string, width, height int) bool {
 }
 
 func scaleToFit(img image.Image, termCols, termRows int) image.Image {
-	maxPxW := termCols * cellW
-	maxPxH := termRows * cellH
+	return scaleToPixels(img, max(1, termCols)*cellW, max(1, termRows)*cellH)
+}
+
+func scaleToPixels(img image.Image, maxPxW, maxPxH int) image.Image {
 	b := img.Bounds()
 	srcW, srcH := b.Dx(), b.Dy()
 	if srcW == 0 || srcH == 0 {
@@ -103,12 +105,16 @@ func encodeTermImage(img image.Image, level png.CompressionLevel, header, tail s
 	if err == nil {
 		return buf.String(), nil
 	}
-	return halfBlockEncode(img)
+	b := img.Bounds()
+	return halfBlockEncode(scaleToPixels(img, max(1, b.Dx()/cellW), max(2, b.Dy()/cellH*2)))
 }
 
 func encodeKittyImage(img image.Image, level png.CompressionLevel, header, tail string) (string, error) {
 	var out strings.Builder
 	out.Grow(kittyPayloadSize(img, len(header), len(tail)))
+	b := img.Bounds()
+	header = fmt.Sprintf("%s,c=%d,r=%d,C=1;", strings.TrimSuffix(header, ";"),
+		(b.Dx()+cellW-1)/cellW, (b.Dy()+cellH-1)/cellH)
 	out.WriteString(header)
 	out.WriteString("\x1b\\")
 	chunks := &kittyChunkWriter{dst: &out, buf: make([]byte, kittyChunkSize)}

@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -14,6 +15,31 @@ func (t failingTransport) RoundTrip(*http.Request) (*http.Response, error) {
 		return nil, errors.New("dial tcp: connection refused")
 	}
 	return nil, t.err
+}
+
+type credentialRedirectTransport struct{ hits int }
+
+func (r *credentialRedirectTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	r.hits++
+	return &http.Response{
+		StatusCode: http.StatusFound,
+		Header:     http.Header{"Location": {"https://evil.example/?" + req.URL.RawQuery}},
+		Body:       io.NopCloser(strings.NewReader("")),
+		Request:    req,
+	}, nil
+}
+
+func TestRule34RejectsCredentialRedirect(t *testing.T) {
+	client := NewRule34Client("777", "secret-value")
+	transport := &credentialRedirectTransport{}
+	client.http.Transport = transport
+	err := client.Ping()
+	if err == nil || transport.hits != 1 {
+		t.Fatalf("credential redirect was followed: hits=%d, err=%v", transport.hits, err)
+	}
+	if strings.Contains(err.Error(), "secret-value") {
+		t.Fatal("redirect error leaked credentials")
+	}
 }
 
 func TestRule34ErrorsDoNotLeakCredentials(t *testing.T) {

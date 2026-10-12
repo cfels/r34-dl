@@ -106,7 +106,7 @@ func TestVideoFrameKittyPayloadIsValid(t *testing.T) {
 		t.Fatalf("frame does not start a kitty transfer: %q", s[:20])
 	}
 	first, payload, rest := kittyPayload(t, s)
-	want := "a=T,f=100,i=2,q=2,m=1"
+	want := "a=T,f=100,i=2,q=2,m=1,c=8,r=3,C=1"
 	if first != want {
 		t.Errorf("first chunk keys = %q, want %q", first, want)
 	}
