@@ -1,6 +1,3 @@
-> [!WARNING]  
-> This repo has been Archived! so it might have still live security issue's and stop working anytime i might rewrite it in C# (WPF UI) tho
-
 <div align="center">
 
 ## 💕🌸💕 R34-DL 💕🌸💕
