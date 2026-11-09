@@ -267,19 +267,22 @@ func TestMediaWithoutStreamerFails(t *testing.T) {
 }
 
 func TestSiteHelpers(t *testing.T) {
-	if len(SiteNames()) != 5 || SiteNames()[0] != "safebooru" {
+	if len(SiteNames()) != 6 || SiteNames()[0] != "safebooru" {
 		t.Errorf("site names = %v", SiteNames())
 	}
 	if !KnownSite("xhamster") || KnownSite("nope") {
 		t.Error("KnownSite is wrong")
 	}
-	for _, name := range []string{"rule34", "pornhub", "xvideos", "xhamster"} {
+	for _, name := range []string{"rule34", "e621", "pornhub", "xvideos", "xhamster"} {
 		if !IsAdultSite(name) {
 			t.Errorf("%s should be age restricted", name)
 		}
 	}
 	if IsAdultSite("safebooru") {
 		t.Error("safebooru is safe")
+	}
+	if !SupportsNegativeTags("e621") {
+		t.Error("e621 supports negative tags")
 	}
 }
 

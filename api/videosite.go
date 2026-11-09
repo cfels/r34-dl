@@ -45,7 +45,7 @@ type Streamer interface {
 	Media(p Post) (Stream, error)
 }
 
-var siteOrder = []string{"safebooru", "rule34", "pornhub", "xvideos", "xhamster"}
+var siteOrder = []string{"safebooru", "rule34", "e621", "pornhub", "xvideos", "xhamster"}
 
 var mediaHostSuffixes = map[string][]string{
 	"pornhub":  {"pornhub.com", "pornhub.org", "phncdn.com"},
@@ -85,7 +85,7 @@ func KnownSite(name string) bool {
 
 func IsAdultSite(name string) bool {
 	switch name {
-	case "rule34", "pornhub", "xvideos", "xhamster":
+	case "rule34", "e621", "pornhub", "xvideos", "xhamster":
 		return true
 	}
 	return false
@@ -93,7 +93,7 @@ func IsAdultSite(name string) bool {
 
 func SupportsNegativeTags(name string) bool {
 	switch name {
-	case "safebooru", "rule34":
+	case "safebooru", "rule34", "e621":
 		return true
 	}
 	return false

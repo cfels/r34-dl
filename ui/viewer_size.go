@@ -4,9 +4,13 @@ import "math"
 
 const (
 	cellW             = 8
-	cellH             = 21
+	cellH             = 17
 	previewHeaderRows = 3
 )
+
+// videoFrameRow is the screen row where the video image is painted: the two
+// status lines sit on rows 1-2, the frame starts right below them.
+const videoFrameRow = previewHeaderRows + 1
 
 const (
 	previewWidthFraction  = 0.768

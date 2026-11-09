@@ -11,7 +11,7 @@ import (
 	"moxiu/r34-dl/ui"
 )
 
-var switchOrder = []string{"safebooru", "rule34", "pornhub", "xvideos", "xhamster"}
+var switchOrder = []string{"safebooru", "rule34", "e621", "pornhub", "xvideos", "xhamster"}
 
 func newSiteHarness(cfg conf.Config, initialTags string) (*harness, map[string]*recordingClient) {
 	sites := map[string]*recordingClient{}
@@ -91,7 +91,7 @@ func TestSwitcherSkipsAdultSitesWithoutAgeCheck(t *testing.T) {
 	if got := h.m.Cfg().ActiveAPI; got != "safebooru" {
 		t.Errorf("active site = %q, want safebooru while unverified", got)
 	}
-	for _, name := range []string{"rule34", "pornhub", "xvideos", "xhamster"} {
+	for _, name := range []string{"rule34", "e621", "pornhub", "xvideos", "xhamster"} {
 		if len(sites[name].searched) != 0 {
 			t.Errorf("%s is age restricted but was searched anyway", name)
 		}

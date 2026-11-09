@@ -43,6 +43,9 @@ func main() {
 	addKey := flag.Bool("add-api-key", false, "store rule34 api key")
 	flag.BoolVar(addKey, "apik", false, "store rule34 api key (short)")
 
+	addE621Key := flag.Bool("add-e621-key", false, "store e621 login and api key")
+	flag.BoolVar(addE621Key, "e621k", false, "store e621 login and api key (short)")
+
 	tags := flag.String("tags", "", "search tags (comma-separated)")
 	flag.StringVar(tags, "t", "", "search tags (short)")
 
@@ -79,10 +82,11 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  -h, --help                       show this help message\n")
 		fmt.Fprintf(os.Stderr, "  -v, --version                    print version and commit\n")
 		fmt.Fprintf(os.Stderr, "  -apik, --add-api-key             store rule34 api key (prompt's u to paste ur api key)\n")
+		fmt.Fprintf(os.Stderr, "  -e621k, --add-e621-key           store e621 login and api key\n")
 		fmt.Fprintf(os.Stderr, "  -b, --bulk                       bulk download mode (asks how many posts to grab)\n")
 		fmt.Fprintf(os.Stderr, "  -l, --limit <N>                  max results to fetch (default 30)\n")
 		fmt.Fprintf(os.Stderr, "  -t, --tags <tags>                search tags (comma-separated)\n")
-		fmt.Fprintf(os.Stderr, "  --api <site>                     site to use (safebooru, rule34, pornhub, xvideos, xhamster)\n")
+		fmt.Fprintf(os.Stderr, "  --api <site>                     site to use (safebooru, rule34, e621, pornhub, xvideos, xhamster)\n")
 		fmt.Fprintf(os.Stderr, "  -cls, --clear-history            clear search history\n")
 		fmt.Fprintf(os.Stderr, "  -a, --audio                      play video audio (default: off)\n")
 		fmt.Fprintf(os.Stderr, "  --no-audio                       mute video audio\n")
@@ -225,6 +229,44 @@ func main() {
 		return
 	}
 
+	if *addE621Key {
+		fmt.Print("e621 login (username): ")
+		reader := bufio.NewReader(os.Stdin)
+		login, _ := reader.ReadString('\n')
+		login = strings.TrimSpace(login)
+
+		fmt.Print("paste ur e621 API key: ")
+		var rawKey string
+		if term.IsTerminal(int(os.Stdin.Fd())) {
+			data, err := term.ReadPassword(int(os.Stdin.Fd()))
+			if err != nil {
+				log.Fatalf("failed to read api key: %v", err)
+			}
+			rawKey = string(data)
+		} else {
+			rawKey, _ = reader.ReadString('\n')
+		}
+		fmt.Println()
+
+		apiKey := strings.TrimSpace(rawKey)
+		if login == "" || apiKey == "" {
+			log.Fatal("no creds provided")
+		}
+		if err := conf.SaveE621Key(login, apiKey); err != nil {
+			log.Fatalf("failed to save credentials: %v", err)
+		}
+		fmt.Printf("saved! login=%s api_key=stored (%d chars)\n", safe.Tag(login), len(apiKey))
+
+		fmt.Print("checking API connection... ")
+		client := api.NewE621Client(login, apiKey)
+		if err := client.Ping(); err != nil {
+			fmt.Printf("unreachable (%s)\n", safe.Text(err.Error()))
+		} else {
+			fmt.Println("OK!")
+		}
+		return
+	}
+
 	cfg, err := conf.Load()
 	if err != nil {
 		log.Fatalf("failed to load config: %v", err)
@@ -247,6 +289,7 @@ func main() {
 	clients := map[string]api.Client{
 		"safebooru": api.NewSafebooruClient(),
 		"rule34":    api.NewRule34Client(cfg.UserID, cfg.APIKey),
+		"e621":      api.NewE621Client(cfg.E621Login, cfg.E621APIKey),
 		"pornhub":   api.NewPornHubClient(),
 		"xvideos":   api.NewXVideosClient(),
 		"xhamster":  api.NewXHamsterClient(),

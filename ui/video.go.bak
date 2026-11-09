@@ -1,0 +1,686 @@
+package ui
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"image"
+	"image/png"
+	"io"
+	"math"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"moxiu/r34-dl/api"
+	"moxiu/r34-dl/safe"
+
+	tea "github.com/charmbracelet/bubbletea"
+)
+
+const (
+	videoUserAgent = "r34-dl/viewer"
+
+	mediaProtocolWhitelist = api.MediaProtocols
+	mediaReadTimeout       = "60000000"
+
+	videoProbeTimeout = 4 * time.Second
+)
+
+const (
+	kittyGraphicsPrefix = "\x1b_Ga=T"
+	kittyTransmitPrefix = "\x1b_Ga=T,f=100,m=1;"
+)
+
+const (
+	kittyImageIDCycle = 1 << 20
+	kittyStaleLimit   = 4
+)
+
+var videoExts = map[string]bool{
+	".mp4":  true,
+	".webm": true,
+	".gif":  true,
+	".mov":  true,
+	".avi":  true,
+	".mkv":  true,
+	".flv":  true,
+}
+
+func isVideo(p api.Post) bool {
+	if p.Video {
+		return true
+	}
+	ext := strings.ToLower(filepath.Ext(p.Image))
+	return videoExts[ext]
+}
+
+type videoPlayer struct {
+	cmd    *exec.Cmd
+	stdout io.ReadCloser
+
+	stderr     bytes.Buffer
+	stderrMu   sync.Mutex
+	stderrPipe *os.File
+
+	width  int
+	height int
+	source string
+	proxy  string
+	relay  *api.MediaRelay
+
+	frames chan image.Image
+	done   chan struct{}
+
+	fpsMu sync.Mutex
+	fps   float64
+
+	audioMu   sync.Mutex
+	audio     *exec.Cmd
+	muted     bool
+	audioOnce sync.Once
+
+	idMu     sync.Mutex
+	frameSeq int
+	pending  []int
+
+	stopOnce sync.Once
+	waitOnce sync.Once
+	errMu    sync.Mutex
+	err      error
+}
+
+type videoOptions struct {
+	audio bool
+}
+
+func videoFitSize(termCols, termRows, srcW, srcH int) (int, int) {
+	cols, rows := videoBox(termCols, termRows)
+	boxW := cols * cellW
+	boxH := rows * cellH
+	if srcW <= 0 || srcH <= 0 {
+		srcW, srcH = 16, 9
+	}
+	scale := math.Min(float64(boxW)/float64(srcW), float64(boxH)/float64(srcH))
+	w := int(math.Round(float64(srcW) * scale))
+	h := int(math.Round(float64(srcH) * scale))
+	if w > boxW {
+		w = boxW
+	}
+	if h > boxH {
+		h = boxH
+	}
+	if w < 2 {
+		w = 2
+	}
+	if h < 2 {
+		h = 2
+	}
+	w &^= 1
+	h &^= 1
+	return w, h
+}
+
+func startVideoPlayer(post api.Post, termCols, termRows int, opts videoOptions) (*videoPlayer, error) {
+	stream, err := api.Media(post)
+	if err != nil {
+		return nil, err
+	}
+	if !safe.PublicMediaURL(stream.URL) {
+		return nil, fmt.Errorf("refusing to play non-public media url for post %d (set %s=1 to allow)", post.ID, safe.AllowPrivateHostsEnv)
+	}
+	return startStreamPlayer(stream, post, termCols, termRows, opts)
+}
+
+func startStreamPlayer(stream api.Stream, post api.Post, termCols, termRows int, opts videoOptions) (*videoPlayer, error) {
+	relay, err := api.NewMediaRelay(stream, post.Site)
+	if err != nil {
+		return nil, err
+	}
+	rawURL := relay.URL
+	srcW, srcH := post.Width, post.Height
+	w, h := videoFitSize(termCols, termRows, srcW, srcH)
+	scale := fmt.Sprintf(
+		"scale=%d:%d:force_original_aspect_ratio=decrease,"+
+			"pad=%d:%d:(ow-iw)/2:(oh-ih)/2:color=black",
+		w, h, w, h,
+	)
+	filter := strings.Join([]string{scale, "setsar=1", "format=rgba"}, ",")
+	cmd := exec.Command(
+		"ffmpeg",
+		"-loglevel", "error",
+		"-nostdin",
+		"-re",
+	)
+	cmd.Env = api.MediaEnv()
+	if isHTTP(rawURL) {
+		cmd.Args = append(cmd.Args, "-user_agent", videoUserAgent, "-http_proxy", relay.Proxy)
+	}
+	if isGIFURL(rawURL) || strings.EqualFold(filepath.Ext(post.Image), ".gif") {
+		cmd.Args = append(cmd.Args, "-stream_loop", "-1")
+	}
+	cmd.Args = append(cmd.Args,
+		"-protocol_whitelist", mediaProtocolWhitelist,
+		"-rw_timeout", mediaReadTimeout,
+		"-i", rawURL,
+		"-an", "-sn",
+		"-vf", filter,
+		"-f", "rawvideo",
+		"-pix_fmt", "rgba",
+		"-",
+	)
+	vp := &videoPlayer{
+		cmd:    cmd,
+		width:  w,
+		height: h,
+		source: rawURL,
+		proxy:  relay.Proxy,
+		relay:  relay,
+		muted:  !opts.audio,
+		frames: make(chan image.Image, 1),
+		done:   make(chan struct{}),
+	}
+	stderrRead, stderrWrite, err := os.Pipe()
+	if err != nil {
+		relay.Close()
+		return nil, err
+	}
+	// A real pipe handle keeps os/exec from spawning a copy goroutine that
+	// cmd.Wait would block on (it never reaches EOF on Windows).
+	cmd.Stderr = stderrWrite
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		stderrRead.Close()
+		stderrWrite.Close()
+		relay.Close()
+		return nil, err
+	}
+	vp.stdout = stdout
+	vp.stderrPipe = stderrRead
+	if err := cmd.Start(); err != nil {
+		stdout.Close()
+		stderrRead.Close()
+		stderrWrite.Close()
+		relay.Close()
+		if errors.Is(err, exec.ErrNotFound) {
+			return nil, errors.New("ffmpeg not found, install it to play videos")
+		}
+		return nil, err
+	}
+	stderrWrite.Close()
+	go vp.collectStderr()
+	go vp.readFrames()
+	go vp.probeFramerate(rawURL, relay.Proxy)
+	return vp, nil
+}
+
+func (vp *videoPlayer) probeFramerate(rawURL, proxy string) {
+	info := probeSource(rawURL, proxy)
+	if info.fps <= 0 {
+		return
+	}
+	vp.fpsMu.Lock()
+	vp.fps = info.fps
+	vp.fpsMu.Unlock()
+}
+
+func (vp *videoPlayer) fpsLabel() string {
+	if vp == nil {
+		return ""
+	}
+	vp.fpsMu.Lock()
+	fps := vp.fps
+	vp.fpsMu.Unlock()
+	if fps <= 0 {
+		return ""
+	}
+	if math.Abs(fps-math.Round(fps)) < 0.01 {
+		return fmt.Sprintf("%.0ffps", fps)
+	}
+	return fmt.Sprintf("%.2ffps", fps)
+}
+
+func isHTTP(rawURL string) bool {
+	return strings.HasPrefix(rawURL, "http://") || strings.HasPrefix(rawURL, "https://")
+}
+
+type sourceInfo struct {
+	fps    float64
+	width  int
+	height int
+}
+
+var (
+	probeSourceMu sync.Mutex
+	probeSourceFn = probeStream
+)
+
+func probeSource(rawURL, proxy string) sourceInfo {
+	probeSourceMu.Lock()
+	fn := probeSourceFn
+	probeSourceMu.Unlock()
+	return fn(rawURL, proxy)
+}
+
+func probeStream(rawURL, proxy string) sourceInfo {
+	ctx, cancel := context.WithTimeout(context.Background(), videoProbeTimeout)
+	defer cancel()
+	args := []string{
+		"-v", "error",
+		"-protocol_whitelist", mediaProtocolWhitelist,
+		"-rw_timeout", mediaReadTimeout,
+		"-select_streams", "v:0",
+		"-show_entries", "stream=width,height,avg_frame_rate,r_frame_rate",
+		"-of", "default=nw=1",
+	}
+	if isHTTP(rawURL) {
+		args = append(args, "-user_agent", videoUserAgent)
+		if proxy != "" {
+			args = append(args, "-http_proxy", proxy)
+		}
+	}
+	args = append(args, rawURL)
+	cmd := exec.CommandContext(ctx, "ffprobe", args...)
+	cmd.Env = api.MediaEnv()
+	out, err := cmd.Output()
+	if err != nil {
+		return sourceInfo{}
+	}
+	return parseSourceInfo(string(out))
+}
+
+func parseSourceInfo(out string) sourceInfo {
+	info := sourceInfo{}
+	var avg, nominal float64
+	for _, line := range strings.Split(out, "\n") {
+		key, value, ok := strings.Cut(strings.TrimSpace(line), "=")
+		if !ok {
+			continue
+		}
+		switch key {
+		case "width":
+			if n, err := strconv.Atoi(value); err == nil {
+				info.width = n
+			}
+		case "height":
+			if n, err := strconv.Atoi(value); err == nil {
+				info.height = n
+			}
+		case "avg_frame_rate":
+			if rate, ok := parseRate(value); ok {
+				avg = rate
+			}
+		case "r_frame_rate":
+			if rate, ok := parseRate(value); ok {
+				nominal = rate
+			}
+		}
+	}
+	if avg > 0 {
+		info.fps = avg
+	} else {
+		info.fps = nominal
+	}
+	return info
+}
+
+func parseRate(s string) (float64, bool) {
+	num, den, ok := strings.Cut(strings.TrimSpace(s), "/")
+	if !ok {
+		return 0, false
+	}
+	n, err := strconv.ParseFloat(num, 64)
+	if err != nil {
+		return 0, false
+	}
+	d, err := strconv.ParseFloat(den, 64)
+	if err != nil || d <= 0 || n <= 0 {
+		return 0, false
+	}
+	return n / d, true
+}
+
+func (vp *videoPlayer) collectStderr() {
+	buf := make([]byte, 4096)
+	for {
+		n, err := vp.stderrPipe.Read(buf)
+		if n > 0 {
+			vp.stderrMu.Lock()
+			if vp.stderr.Len() < 64<<10 {
+				vp.stderr.Write(buf[:n])
+			}
+			vp.stderrMu.Unlock()
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+func (vp *videoPlayer) stderrText() string {
+	vp.stderrMu.Lock()
+	defer vp.stderrMu.Unlock()
+	return vp.stderr.String()
+}
+
+func (vp *videoPlayer) readFrames() {
+	defer close(vp.frames)
+	defer vp.relay.Close()
+	stride := vp.width * 4
+	started := false
+	for {
+		pix := make([]byte, stride*vp.height)
+		if _, err := io.ReadFull(vp.stdout, pix); err != nil {
+			if !vp.stopped() && err != io.EOF && err != io.ErrUnexpectedEOF {
+				vp.setErr(fmt.Errorf("video stream: %w", err))
+			}
+			break
+		}
+		img := &image.RGBA{
+			Pix:    pix,
+			Stride: stride,
+			Rect:   image.Rect(0, 0, vp.width, vp.height),
+		}
+		if !started {
+			started = true
+			vp.startAudio()
+		}
+		if !vp.publish(img) {
+			return
+		}
+	}
+	vp.wait()
+	if !vp.stopped() && vp.takeErr() == nil {
+		if msg := lastLine(vp.stderrText()); msg != "" {
+			vp.setErr(errors.New(msg))
+		}
+	}
+}
+
+func isGIFURL(rawURL string) bool {
+	if i := strings.IndexAny(rawURL, "?#"); i >= 0 {
+		rawURL = rawURL[:i]
+	}
+	return strings.EqualFold(filepath.Ext(rawURL), ".gif")
+}
+
+var (
+	audioQualityOnce sync.Once
+	audioQualityArgs []string
+)
+
+func audioFilterArgs() []string {
+	audioQualityOnce.Do(func() {
+		soxr := []string{"-af", "aresample=resampler=soxr:precision=28"}
+		if ffmpegAccepts(soxr...) {
+			audioQualityArgs = soxr
+			return
+		}
+		audioQualityArgs = []string{"-af", "aresample=filter_size=64"}
+	})
+	return audioQualityArgs
+}
+
+func ffmpegAccepts(args ...string) bool {
+	cmd := exec.Command("ffmpeg", "-hide_banner", "-loglevel", "error",
+		"-f", "lavfi", "-i", "sine=d=0.01")
+	cmd.Args = append(cmd.Args, args...)
+	cmd.Args = append(cmd.Args, "-f", "null", "-")
+	return cmd.Run() == nil
+}
+
+func spawnAudio(rawURL, proxy string) *exec.Cmd {
+	path, err := exec.LookPath("ffplay")
+	if err != nil {
+		return nil
+	}
+	args := []string{"-loglevel", "error", "-nodisp", "-autoexit", "-vn", "-sn"}
+	args = append(args, audioFilterArgs()...)
+	args = append(args, "-protocol_whitelist", mediaProtocolWhitelist)
+	args = append(args, "-rw_timeout", mediaReadTimeout)
+	if isHTTP(rawURL) {
+		args = append(args, "-user_agent", videoUserAgent)
+		if proxy != "" {
+			args = append(args, "-http_proxy", proxy)
+		}
+	}
+	cmd := exec.Command(path, append(args, rawURL)...)
+	cmd.Env = api.MediaEnv()
+	cmd.Stdin = nil
+	if err := cmd.Start(); err != nil {
+		return nil
+	}
+	return cmd
+}
+
+func (vp *videoPlayer) toggleMute() {
+	vp.audioMu.Lock()
+	defer vp.audioMu.Unlock()
+	if vp.muted {
+		vp.muted = false
+		if vp.source != "" {
+			vp.audio = spawnAudio(vp.source, vp.proxy)
+		}
+		return
+	}
+	vp.muted = true
+	vp.killAudio()
+}
+
+func (vp *videoPlayer) killAudio() {
+	vp.audioMu.Lock()
+	defer vp.audioMu.Unlock()
+	if vp.audio != nil {
+		if vp.audio.Process != nil {
+			_ = vp.audio.Process.Kill()
+		}
+		_ = vp.audio.Wait()
+		vp.audio = nil
+	}
+}
+
+func (vp *videoPlayer) audioProcess() *exec.Cmd {
+	vp.audioMu.Lock()
+	defer vp.audioMu.Unlock()
+	return vp.audio
+}
+
+func (vp *videoPlayer) startAudio() {
+	vp.audioOnce.Do(func() {
+		vp.audioMu.Lock()
+		defer vp.audioMu.Unlock()
+		if vp.muted || vp.source == "" {
+			return
+		}
+		vp.audio = spawnAudio(vp.source, vp.proxy)
+	})
+}
+
+func (vp *videoPlayer) startAudio() {
+	vp.audioOnce.Do(func() {
+		vp.audioMu.Lock()
+		defer vp.audioMu.Unlock()
+		if vp.muted || vp.source == "" {
+			return
+		}
+		vp.audio = spawnAudio(vp.source, vp.proxy)
+	})
+}
+
+func (vp *videoPlayer) startAudio() {
+	vp.audioOnce.Do(func() {
+		vp.audioMu.Lock()
+		defer vp.audioMu.Unlock()
+		if vp.muted || vp.source == "" {
+			return
+		}
+		vp.audio = spawnAudio(vp.source, vp.proxy)
+	})
+}
+
+func (vp *videoPlayer) startAudio() {
+	vp.audioOnce.Do(func() {
+		vp.audioMu.Lock()
+		defer vp.audioMu.Unlock()
+		if vp.muted || vp.source == "" {
+			return
+		}
+		vp.audio = spawnAudio(vp.source, vp.proxy)
+	})
+}
+
+func (vp *videoPlayer) isMuted() bool {
+	vp.audioMu.Lock()
+	defer vp.audioMu.Unlock()
+	return vp.muted
+}
+
+func (vp *videoPlayer) publish(img image.Image) bool {
+	select {
+	case vp.frames <- img:
+		return true
+	default:
+	}
+	select {
+	case <-vp.frames:
+	default:
+	}
+	select {
+	case vp.frames <- img:
+		return true
+	case <-vp.done:
+		return false
+	}
+}
+
+func (vp *videoPlayer) stopped() bool {
+	select {
+	case <-vp.done:
+		return true
+	default:
+		return false
+	}
+}
+
+func (vp *videoPlayer) stop() {
+	vp.stopOnce.Do(func() {
+		close(vp.done)
+		vp.audioOnce.Do(func() {})
+		vp.audioMu.Lock()
+		vp.killAudio()
+		vp.audioMu.Unlock()
+		if vp.cmd != nil && vp.cmd.Process != nil {
+			_ = vp.cmd.Process.Kill()
+		}
+		if vp.relay != nil {
+			vp.relay.Close()
+		}
+		if vp.stderrPipe != nil {
+			vp.stderrPipe.Close()
+		}
+	})
+	if vp.cmd != nil {
+		vp.wait()
+	}
+}
+
+func (vp *videoPlayer) wait() {
+	vp.waitOnce.Do(func() { _ = vp.cmd.Wait() })
+}
+
+func (vp *videoPlayer) setErr(err error) {
+	vp.errMu.Lock()
+	vp.err = err
+	vp.errMu.Unlock()
+}
+
+func (vp *videoPlayer) takeErr() error {
+	vp.errMu.Lock()
+	defer vp.errMu.Unlock()
+	return vp.err
+}
+
+func lastLine(s string) string {
+	lines := strings.Split(strings.TrimSpace(s), "\n")
+	if len(lines) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(lines[len(lines)-1])
+}
+
+func nextFrame(vp *videoPlayer) tea.Cmd {
+	return func() tea.Msg {
+		select {
+		case img, ok := <-vp.frames:
+			if !ok {
+				return videoDoneMsg{vp: vp, err: vp.takeErr()}
+			}
+			return videoFrameMsg{vp: vp, frame: img}
+		case <-vp.done:
+			return videoDoneMsg{vp: vp}
+		}
+	}
+}
+
+func previewFrameView(frame, status string) string {
+	return status + "\n\n" + strings.TrimSuffix(frame, "\n")
+}
+
+func renderVideoFrame(vp *videoPlayer, img image.Image, termCols, termRows int) tea.Cmd {
+	return func() tea.Msg {
+		cols, rows := videoBox(termCols, termRows)
+		scaled := scaleToFit(img, cols, rows)
+		cur, stale := vp.kittyFrameIDs()
+		s, err := encodeVideoFrame(scaled, rows, cur, stale)
+		if err != nil {
+			return videoDoneMsg{vp: vp, err: fmt.Errorf("render frame: %w", err)}
+		}
+		return videoRenderedMsg{vp: vp, s: s}
+	}
+}
+
+func encodeVideoFrame(img image.Image, rows, id int, stale []int) (string, error) {
+	if sixelVideoTerminal() {
+		return encodeSixelVideoFrame(img, rows)
+	}
+	return encodeTermImage(img, png.NoCompression, kittyTransmit(id), kittyDeleteImages(stale))
+}
+
+func kittyTransmit(id int) string {
+	return fmt.Sprintf("\x1b_Ga=T,f=100,i=%d,q=2,m=1;", id)
+}
+
+func kittyDeleteImage(id int) string {
+	return fmt.Sprintf("\x1b_Ga=d,d=I,i=%d,q=2;\x1b\\", id)
+}
+
+func kittyDeleteImages(ids []int) string {
+	var b strings.Builder
+	for _, id := range ids {
+		b.WriteString(kittyDeleteImage(id))
+	}
+	return b.String()
+}
+
+func (vp *videoPlayer) kittyFrameIDs() (int, []int) {
+	vp.idMu.Lock()
+	defer vp.idMu.Unlock()
+	vp.frameSeq++
+	id := 1 + vp.frameSeq%kittyImageIDCycle
+	stale := make([]int, 0, len(vp.pending))
+	for _, old := range vp.pending {
+		if old != id {
+			stale = append(stale, old)
+		}
+	}
+	vp.pending = append(vp.pending, id)
+	if len(vp.pending) > kittyStaleLimit {
+		vp.pending = append(vp.pending[:0], vp.pending[len(vp.pending)-kittyStaleLimit:]...)
+	}
+	return id, stale
+}
