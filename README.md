@@ -2,6 +2,8 @@
 
 ## 💕🌸💕 R34-DL 💕🌸💕
 
+<img width="1920" height="1080" alt="fiut" src="https://github.com/user-attachments/assets/c7bbd1a6-0567-4647-9e49-243441c8002f" />
+
 </div>
 
 a rule34/safebooru downloader with alot of feature's, Why? cuz i didn't saw any good r34 downloader since R34 dropped API update's, and i also wanted to add safe option (safebooru) to this type of downloader, plus video sites (pornhub, xvideos, xhamster) in the same switcher
