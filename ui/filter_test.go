@@ -148,6 +148,26 @@ func TestAIFilterTogglePersistsAndShows(t *testing.T) {
 	}
 }
 
+func TestE621KeyWarningShown(t *testing.T) {
+	m := newListModel()
+	m.state = stateSearch
+	m.cfg.ActiveAPI = "e621"
+
+	view := m.View()
+	if !strings.Contains(view, "e621 requires an API key") {
+		t.Errorf("e621 without a stored key should say so:\n%s", view)
+	}
+	if !strings.Contains(view, "[e621]") {
+		t.Errorf("the search screen should label the active site:\n%s", view)
+	}
+
+	m.cfg.E621Login = "someone"
+	m.cfg.E621APIKey = "stored"
+	if view := m.View(); strings.Contains(view, "e621 requires an API key") {
+		t.Errorf("the warning should go away once a key is stored:\n%s", view)
+	}
+}
+
 func TestAIFilterIsRule34Only(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	m := newListModel()

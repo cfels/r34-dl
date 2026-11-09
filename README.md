@@ -7,11 +7,11 @@
 a rule34/safebooru downloader with alot of feature's, Why? cuz i didn't saw any good r34 downloader since R34 dropped API update's, and i also wanted to add safe option (safebooru) to this type of downloader, plus video sites (pornhub, xvideos, xhamster) in the same switcher
 
 > [!NOTE]  
-> R34 updated thier API and now u need API key, read [Obtaining API key](#obatining-api-key), what about Safebooru? well Safebooru doesn't need one so u can just jump in and use the tool (unless u want rule34 access then you'll need API key)
+> Rule 34 & e621 require API keys - follow the instructions below to make them. Or don't.
 
 ### Features
 * typing predictions
-* 5 sites support (ph, xvids, xhamster, r34, safebooru)
+* 7 sites support (ph, xvids, xhamster, r34, e621, safebooru, e6)
 * single and bulk content downloads
 * bulk download mode with `-b` (asks how many posts to grab, then walks the result pages)
 * image, gif and video previews rendered in terminal (`kitty` recommended for best quality and smooth playback)
@@ -20,6 +20,7 @@ a rule34/safebooru downloader with alot of feature's, Why? cuz i didn't saw any 
 * search history
 * switch sites mid-session with `tab`
 * age check on first launch
+* experimental windows terminal support (sixel is bloated there, therefore colours in videos are dithered fow low cpu usage & stable framerate)
 * and much more!
 
 ### Supported Sites
@@ -28,6 +29,7 @@ a rule34/safebooru downloader with alot of feature's, Why? cuz i didn't saw any 
 | ---- | ------ | ----------- | -------- |
 | safebooru | yes | yes | image/gif/vids |
 | rule34 | needs an API key | yes | image/gif/vids |
+| e621 | needs an API key | yes | image/gif/vids |
 | pornhub | yes | yes | video (mp4) |
 | xvideos | yes | yes | video (mp4) |
 | xhamster | yes | yes | video (mp4) |
@@ -60,10 +62,11 @@ Options:
   -h, --help                       show this help message
   -v, --version                    print version and commit
   -apik, --add-api-key             store rule34 api key (prompt's u to paste ur api key)
+  -e621k, --add-e621-key           store e621 login and api key
   -b, --bulk                       bulk download mode (asks how many posts to grab)
   -l, --limit <N>                  max results to fetch (default 30)
   -t, --tags <tags>                search tags (comma-separated)
-  --api <site>                     site to use (safebooru, rule34, pornhub, xvideos, xhamster)
+  --api <site>                     site to use (safebooru, rule34, e621, pornhub, xvideos, xhamster)
   -cls, --clear-history            clear search history
   -a, --audio                      play video audio (default: off)
   --no-audio                       mute video audio
@@ -74,7 +77,7 @@ Options:
   --run-tests                      run tests
 ```
 
-### Obatining API key
+### Obtaining r34 API key
 Here's how to get one
 go to [rule34.xxx Account Page](https://rule34.xxx/index.php?page=account&s=home) to register an acc or login if you have an account already,
 then go to `Options` and find section called `API Access Credentials` here's ur api key, copy the whole block!<br>
@@ -87,6 +90,13 @@ u will see prompt like this so just paste full API key block into it
 paste ur full rule34 API key (e.g. &api_key=xxx&user_id=777): 
 ```
 ur DONE! u can access r34-dl (rule34 option)
+
+### Obtaining an e621 API key
+[e621.com - settings - apps - manage api keys](https://e621.net/api_keys)
+
+run: `r34-dl -e621k`
+
+if you use e1547 then i think u can copy the same key and itll werk - for me it does
 
 ### Showcase
 <img src="https://github.com/cfels/r34-dl/blob/release/assets/showcase/preview.gif" width="855">
@@ -105,7 +115,7 @@ ur DONE! u can access r34-dl (rule34 option)
 </table>
 
 ### Contributing
-Feel free to contribute by sumbiting a **[PR](https://github.com/cfels/r34-dl/pulls)** or an **[Issue](https://github.com/cfels/r34-dl/issues)**, i will probably accept yall pull requests, or if u decide to suggest something in Issue's tab that's worth fixing or adding.
+Feel free to contribute by submitting a **[PR](https://github.com/cfels/r34-dl/pulls)** or an **[Issue](https://github.com/cfels/r34-dl/issues)**, i will probably accept yall pull requests, or if u decide to suggest something in Issue's tab that's worth fixing or adding.
 
 ### License
-This Project uses [MIT License](https://github.com/cfels/r34-dl/blob/dev/LICENSE) so make sure to follow it!
+This Project uses the [MIT License](https://github.com/cfels/r34-dl/blob/main/LICENSE) so make sure to follow it!

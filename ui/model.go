@@ -91,6 +91,7 @@ type Model struct {
 	videoFrame    string
 	video         *videoPlayer
 	ageGateCursor int
+	stateBeforeVideo state
 
 	history       []string
 	historyIdx    int

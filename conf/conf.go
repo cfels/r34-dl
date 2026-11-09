@@ -12,6 +12,8 @@ import (
 type Config struct {
 	APIKey        string   `json:"api_key"`
 	UserID        string   `json:"user_id"`
+	E621APIKey    string   `json:"e621_api_key,omitempty"`
+	E621Login     string   `json:"e621_login,omitempty"`
 	AgeVerified   bool     `json:"age_verified"`
 	ActiveAPI     string   `json:"active_api"`
 	AudioEnabled  bool     `json:"audio_enabled,omitempty"`
@@ -158,5 +160,15 @@ func SaveAPIKey(userID, apiKey string) error {
 	}
 	cfg.UserID = userID
 	cfg.APIKey = apiKey
+	return Save(cfg)
+}
+
+func SaveE621Key(login, apiKey string) error {
+	cfg, err := Load()
+	if err != nil {
+		return err
+	}
+	cfg.E621Login = login
+	cfg.E621APIKey = apiKey
 	return Save(cfg)
 }
