@@ -22,7 +22,7 @@ a rule34/safebooru downloader with alot of feature's, Why? cuz i didn't saw any 
 * search history
 * switch sites mid-session with `tab`
 * age check on first launch
-* experimental windows terminal support (sixel is bloated there, therefore colours in videos are dithered fow low cpu usage & stable framerate)
+* experimental windows support with sixel in windows terminal 1.22+ support (sixel is bloated there, therefore colours in videos are dithered fow low cpu usage & stable framerate) & without sixel in older versions along with cmd.exe & powershell.exe, just with pixelated video/images
 * and much more!
 
 ### Supported Sites
