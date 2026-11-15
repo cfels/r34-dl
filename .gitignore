@@ -1,3 +1,5 @@
 r34-dl
 dist/
 downloads/
+*.exe
+.freebuff

@@ -9,8 +9,10 @@ import (
 	"image/png"
 	"io"
 	"math"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -62,7 +64,10 @@ func isVideo(p api.Post) bool {
 type videoPlayer struct {
 	cmd    *exec.Cmd
 	stdout io.ReadCloser
-	stderr bytes.Buffer
+
+	stderr     bytes.Buffer
+	stderrMu   sync.Mutex
+	stderrPipe *os.File
 
 	width  int
 	height int
@@ -76,10 +81,18 @@ type videoPlayer struct {
 	fpsMu sync.Mutex
 	fps   float64
 
-	audioMu   sync.Mutex
-	audio     *exec.Cmd
-	muted     bool
-	audioOnce sync.Once
+	// audioMu guards muted and audio. audioSpawnMu serialises reconciliation of
+	// the desired mute state with the running player: without it two keypresses
+	// racing the first frame could each start an ffplay and only one would be
+	// tracked, leaving the other playing forever with no way to stop it.
+	audioMu      sync.Mutex
+	audioSpawnMu sync.Mutex
+	audio        *audioTrack
+	muted        bool
+	audioOnce    sync.Once
+
+	clockMu   sync.Mutex
+	startedAt time.Time
 
 	idMu     sync.Mutex
 	frameSeq int
@@ -181,21 +194,35 @@ func startStreamPlayer(stream api.Stream, post api.Post, termCols, termRows int,
 		frames: make(chan image.Image, 1),
 		done:   make(chan struct{}),
 	}
-	cmd.Stderr = &vp.stderr
-	stdout, err := cmd.StdoutPipe()
+	stderrRead, stderrWrite, err := os.Pipe()
 	if err != nil {
 		relay.Close()
 		return nil, err
 	}
+	// A real pipe handle keeps os/exec from spawning a copy goroutine that
+	// cmd.Wait would block on (it never reaches EOF on Windows).
+	cmd.Stderr = stderrWrite
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		stderrRead.Close()
+		stderrWrite.Close()
+		relay.Close()
+		return nil, err
+	}
 	vp.stdout = stdout
+	vp.stderrPipe = stderrRead
 	if err := cmd.Start(); err != nil {
 		stdout.Close()
+		stderrRead.Close()
+		stderrWrite.Close()
 		relay.Close()
 		if errors.Is(err, exec.ErrNotFound) {
 			return nil, errors.New("ffmpeg not found, install it to play videos")
 		}
 		return nil, err
 	}
+	stderrWrite.Close()
+	go vp.collectStderr()
 	go vp.readFrames()
 	go vp.probeFramerate(rawURL, relay.Proxy)
 	return vp, nil
@@ -327,6 +354,29 @@ func parseRate(s string) (float64, bool) {
 	return n / d, true
 }
 
+func (vp *videoPlayer) collectStderr() {
+	buf := make([]byte, 4096)
+	for {
+		n, err := vp.stderrPipe.Read(buf)
+		if n > 0 {
+			vp.stderrMu.Lock()
+			if vp.stderr.Len() < 64<<10 {
+				vp.stderr.Write(buf[:n])
+			}
+			vp.stderrMu.Unlock()
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+func (vp *videoPlayer) stderrText() string {
+	vp.stderrMu.Lock()
+	defer vp.stderrMu.Unlock()
+	return vp.stderr.String()
+}
+
 func (vp *videoPlayer) readFrames() {
 	defer close(vp.frames)
 	defer vp.relay.Close()
@@ -345,17 +395,17 @@ func (vp *videoPlayer) readFrames() {
 			Stride: stride,
 			Rect:   image.Rect(0, 0, vp.width, vp.height),
 		}
-		if !vp.publish(img) {
-			return
-		}
 		if !started {
 			started = true
 			vp.startAudio()
 		}
+		if !vp.publish(img) {
+			return
+		}
 	}
 	vp.wait()
 	if !vp.stopped() && vp.takeErr() == nil {
-		if msg := lastLine(vp.stderr.String()); msg != "" {
+		if msg := lastLine(vp.stderrText()); msg != "" {
 			vp.setErr(errors.New(msg))
 		}
 	}
@@ -393,7 +443,73 @@ func ffmpegAccepts(args ...string) bool {
 	return cmd.Run() == nil
 }
 
-func spawnAudio(rawURL, proxy string) *exec.Cmd {
+const (
+	// audioStartLead is added to the picture position when audio starts: ffplay
+	// needs a moment to open the stream and fill its buffer, so asking it for a
+	// slightly later point keeps the sound level with the frames instead of
+	// trailing them.
+	audioStartLead = 0.25
+	// audioSeekMin is how far in the clip has to be before unmuting seeks at
+	// all. Seeking a fraction of a second into a fresh clip would only cut the
+	// start of the sound off.
+	audioSeekMin = 1.0
+	// audioStopTimeout bounds how long a mute waits for ffplay to die. Killing is
+	// immediate, so this only ever fires if the OS refuses to reap it.
+	audioStopTimeout = 2 * time.Second
+)
+
+// audioTrack is one running ffplay plus a channel closed once it exited and was
+// reaped. Owning the process this way means a mute can wait for the sound to
+// actually stop, and an ffplay that exits on its own frees its slot.
+type audioTrack struct {
+	cmd  *exec.Cmd
+	done chan struct{}
+}
+
+func (t *audioTrack) stop() {
+	if t == nil {
+		return
+	}
+	killProcessTree(t.cmd)
+	select {
+	case <-t.done:
+	case <-time.After(audioStopTimeout):
+	}
+}
+
+// killProcessTree terminates cmd together with any process it launched. The
+// ffplay that LookPath finds is usually a package-manager shim, a small launcher
+// that starts the real player as its child: killing only the shim leaves the
+// real ffplay running with no handle left and the audio unkillable.
+func killProcessTree(cmd *exec.Cmd) {
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+	if runtime.GOOS == "windows" {
+		kill := exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(cmd.Process.Pid))
+		if err := kill.Run(); err == nil {
+			return
+		}
+	}
+	_ = cmd.Process.Kill()
+}
+
+func (vp *videoPlayer) trackAudio(t *audioTrack) {
+	vp.audioMu.Lock()
+	vp.audio = t
+	vp.audioMu.Unlock()
+	go func() {
+		_ = t.cmd.Wait()
+		close(t.done)
+		vp.audioMu.Lock()
+		if vp.audio == t {
+			vp.audio = nil
+		}
+		vp.audioMu.Unlock()
+	}()
+}
+
+func spawnAudio(rawURL, proxy string, offset float64) *audioTrack {
 	path, err := exec.LookPath("ffplay")
 	if err != nil {
 		return nil
@@ -408,57 +524,105 @@ func spawnAudio(rawURL, proxy string) *exec.Cmd {
 			args = append(args, "-http_proxy", proxy)
 		}
 	}
+	if offset > 0 {
+		// Input seek: ffplay jumps instead of decoding everything before it.
+		args = append(args, "-ss", strconv.FormatFloat(offset, 'f', 3, 64))
+	}
 	cmd := exec.Command(path, append(args, rawURL)...)
 	cmd.Env = api.MediaEnv()
 	cmd.Stdin = nil
-	cmd.Stdout = io.Discard
-	cmd.Stderr = io.Discard
 	if err := cmd.Start(); err != nil {
 		return nil
 	}
-	return cmd
+	return &audioTrack{cmd: cmd, done: make(chan struct{})}
 }
 
-func (vp *videoPlayer) startAudio() {
-	vp.audioOnce.Do(func() {
-		vp.audioMu.Lock()
-		defer vp.audioMu.Unlock()
-		if vp.muted || vp.source == "" {
-			return
-		}
-		vp.audio = spawnAudio(vp.source, vp.proxy)
-	})
+// audioOffset reports how far into the clip the picture is, so unmuting can
+// start the sound where the video already is instead of at the beginning. The
+// stream is decoded in realtime, so wall clock since the first frame is the
+// playback position; frame counting would need an accurate source framerate
+// before the probe has answered.
+func (vp *videoPlayer) audioOffset() float64 {
+	vp.clockMu.Lock()
+	start := vp.startedAt
+	vp.clockMu.Unlock()
+	if start.IsZero() {
+		return 0
+	}
+	elapsed := time.Since(start).Seconds()
+	if elapsed < audioSeekMin {
+		return 0
+	}
+	return elapsed + audioStartLead
 }
 
-func (vp *videoPlayer) toggleMute() {
-	vp.audioOnce.Do(func() {})
+// syncAudio reconciles the desired mute state with the running player. It is the
+// only place that starts audio and it always stops the tracked player first, so
+// at most one ffplay is ever alive for this video.
+func (vp *videoPlayer) syncAudio() {
+	vp.audioSpawnMu.Lock()
+	defer vp.audioSpawnMu.Unlock()
+
 	vp.audioMu.Lock()
-	defer vp.audioMu.Unlock()
-	if vp.muted {
-		vp.muted = false
-		if vp.source != "" {
-			vp.audio = spawnAudio(vp.source, vp.proxy)
+	muted, source, proxy, current := vp.muted, vp.source, vp.proxy, vp.audio
+	vp.audioMu.Unlock()
+
+	if muted || source == "" || vp.stopped() {
+		if current != nil {
+			vp.audioMu.Lock()
+			if vp.audio == current {
+				vp.audio = nil
+			}
+			vp.audioMu.Unlock()
+			current.stop()
 		}
 		return
 	}
-	vp.muted = true
-	vp.killAudio()
+	if current != nil {
+		return // Already playing.
+	}
+	track := spawnAudio(source, proxy, vp.audioOffset())
+	if track == nil {
+		return
+	}
+	// The state can change while ffplay is opening the stream; drop the player
+	// instead of leaving it running untracked.
+	vp.audioMu.Lock()
+	stale := vp.muted || vp.stopped()
+	vp.audioMu.Unlock()
+	if stale {
+		track.stop()
+		return
+	}
+	vp.trackAudio(track)
+}
+
+func (vp *videoPlayer) toggleMute() {
+	vp.audioMu.Lock()
+	vp.muted = !vp.muted
+	vp.audioMu.Unlock()
+	vp.syncAudio()
 }
 
 func (vp *videoPlayer) killAudio() {
-	if vp.audio != nil {
-		if vp.audio.Process != nil {
-			_ = vp.audio.Process.Kill()
-		}
-		_ = vp.audio.Wait()
-		vp.audio = nil
-	}
+	vp.audioMu.Lock()
+	track := vp.audio
+	vp.audio = nil
+	vp.audioMu.Unlock()
+	track.stop()
 }
 
 func (vp *videoPlayer) audioProcess() *exec.Cmd {
 	vp.audioMu.Lock()
 	defer vp.audioMu.Unlock()
-	return vp.audio
+	if vp.audio == nil {
+		return nil
+	}
+	return vp.audio.cmd
+}
+
+func (vp *videoPlayer) startAudio() {
+	vp.audioOnce.Do(vp.syncAudio)
 }
 
 func (vp *videoPlayer) isMuted() bool {
@@ -468,6 +632,11 @@ func (vp *videoPlayer) isMuted() bool {
 }
 
 func (vp *videoPlayer) publish(img image.Image) bool {
+	vp.clockMu.Lock()
+	if vp.startedAt.IsZero() {
+		vp.startedAt = time.Now()
+	}
+	vp.clockMu.Unlock()
 	select {
 	case vp.frames <- img:
 		return true
@@ -498,18 +667,19 @@ func (vp *videoPlayer) stop() {
 	vp.stopOnce.Do(func() {
 		close(vp.done)
 		vp.audioOnce.Do(func() {})
-		vp.audioMu.Lock()
+		// killAudio takes audioMu itself; taking it here and then calling it
+		// deadlocks the mutex and freezes the whole event loop on stop.
 		vp.killAudio()
-		vp.audioMu.Unlock()
-		if vp.cmd != nil && vp.cmd.Process != nil {
-			_ = vp.cmd.Process.Kill()
+		if vp.stderrPipe != nil {
+			vp.stderrPipe.Close()
 		}
 		if vp.relay != nil {
 			vp.relay.Close()
 		}
+		killProcessTree(vp.cmd)
 	})
 	if vp.cmd != nil {
-		vp.wait()
+		go vp.wait()
 	}
 }
 
@@ -555,10 +725,31 @@ func previewFrameView(frame, status string) string {
 	return status + "\n\n" + strings.TrimSuffix(frame, "\n")
 }
 
+// videoFrameOut is where sixel video frames go. Frames are written straight to
+// the terminal instead of being rendered through Bubble Tea: the renderer
+// repaints a view line whenever it changes, which erased and re-wrapped every
+// frame and made playback flicker.
+var videoFrameOut io.Writer = os.Stdout
+
+func paintSixelVideoFrame(img image.Image) error {
+	s, err := encodeSixelVideoFrame(img)
+	if err != nil {
+		return err
+	}
+	_, err = io.WriteString(videoFrameOut, s)
+	return err
+}
+
 func renderVideoFrame(vp *videoPlayer, img image.Image, termCols, termRows int) tea.Cmd {
 	return func() tea.Msg {
 		cols, rows := videoBox(termCols, termRows)
 		scaled := scaleToFit(img, cols, rows)
+		if sixelVideoTerminal() {
+			if err := paintSixelVideoFrame(scaled); err != nil {
+				return videoDoneMsg{vp: vp, err: fmt.Errorf("render frame: %w", err)}
+			}
+			return videoRenderedMsg{vp: vp}
+		}
 		cur, stale := vp.kittyFrameIDs()
 		s, err := encodeVideoFrame(scaled, cur, stale)
 		if err != nil {

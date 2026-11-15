@@ -3,6 +3,7 @@ package ui
 import (
 	"bytes"
 	"encoding/base64"
+	"fmt"
 	"image"
 	"image/png"
 	"strings"
@@ -170,6 +171,59 @@ func TestVideoFramesSkipPngCompression(t *testing.T) {
 	}
 	if len(stillPayload) >= len(framePayload)/2 {
 		t.Errorf("still image payload = %d bytes, want it compressed well below the %d byte frame", len(stillPayload), len(framePayload))
+	}
+}
+
+func TestWindowsTerminalGetsSixel(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
+	t.Setenv("TERM_PROGRAM", "")
+	t.Setenv("WT_SESSION", strings.Repeat("a", 36))
+
+	s, err := encodeImage(testGradient(32, 24))
+	if err != nil {
+		t.Fatalf("encodeImage: %v", err)
+	}
+	if !strings.HasPrefix(s, "\x1bP") {
+		t.Fatalf("windows terminal should get a sixel image, got %.12q", s)
+	}
+	if !strings.HasSuffix(strings.TrimRight(s, "\r\n"), "\x1b\\") {
+		t.Fatalf("sixel image is not terminated: %.12q", s[max(0, len(s)-12):])
+	}
+}
+
+func TestWindowsTerminalVideoFrameRepaintsInPlace(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
+	t.Setenv("TERM_PROGRAM", "")
+	t.Setenv("WT_SESSION", strings.Repeat("a", 36))
+	if rasterm.Kitty.Available() {
+		t.Skip("kitty graphics win over sixel")
+	}
+
+	frame, err := encodeSixelVideoFrame(testGradient(64, 48))
+	if err != nil {
+		t.Fatalf("encodeSixelVideoFrame: %v", err)
+	}
+	if !strings.HasPrefix(frame, "\x1b7") || !strings.HasSuffix(frame, "\x1b8") {
+		t.Fatalf("frame must save and restore the cursor, got %.8q ... %.8q", frame, frame[max(0, len(frame)-8):])
+	}
+	want := fmt.Sprintf("\x1b7\x1b[%d;1H", videoFrameRow)
+	if !strings.HasPrefix(frame, want) {
+		t.Fatalf("frame must be addressed at row %d, got %.16q", videoFrameRow, frame)
+	}
+	imageAt := strings.Index(frame, "\x1bP")
+	if imageAt < 0 {
+		t.Fatal("frame carries no sixel image")
+	}
+	// Erasing the rows first is what blanked the box between frames: the sixel
+	// raster paints every pixel of its box, so a plain overwrite is enough.
+	if strings.Contains(frame, "\x1b[K") {
+		t.Fatal("frame must not erase its rows before painting")
+	}
+	if strings.Count(frame, "\x1bP") != 1 {
+		t.Fatalf("frame carries %d sixel images, want exactly 1", strings.Count(frame, "\x1bP"))
+	}
+	if body := strings.TrimSuffix(strings.TrimPrefix(frame, want), "\x1b8"); !strings.HasPrefix(body, "\x1bP") {
+		t.Fatal("frame must paint straight after moving to its row")
 	}
 }
 

@@ -39,6 +39,10 @@ func makeTestVideo(t *testing.T, fps, seconds int) string {
 		"ffmpeg", "-y", "-loglevel", "error",
 		"-f", "lavfi", "-i",
 		fmt.Sprintf("testsrc2=size=640x360:rate=%d:duration=%d", fps, seconds),
+		// A silent track keeps the clip realistic for the audio tests: ffplay
+		// exits at once on a file with no audio stream.
+		"-f", "lavfi", "-i", fmt.Sprintf("anullsrc=r=48000:cl=stereo:d=%d", seconds),
+		"-shortest",
 		"-pix_fmt", "yuv420p", path,
 	)
 	if out, err := cmd.CombinedOutput(); err != nil {

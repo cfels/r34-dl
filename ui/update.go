@@ -210,6 +210,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.viewerImage = ""
 					m.viewerData = nil
 					if isVideo(m.viewerPost) {
+						m.stateBeforeVideo = m.state
 						m.state = stateViewerLoading
 						post := m.viewerPost
 						w, h := m.width, m.height
@@ -264,14 +265,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.ClearScreen
 
 		case stateVideoPlaying:
+			switch msg.Type {
+			case tea.KeyCtrlC, tea.KeyEsc:
+				m.stopVideo()
+				return m, tea.Quit
+			}
+			if msg.String() == "q" {
+				m.stopVideo()
+				return m, tea.Quit
+			}
 			if msg.String() == "m" && m.video != nil {
 				m.video.toggleMute()
 				m.cfg.AudioEnabled = !m.video.isMuted()
 				_ = conf.Save(m.cfg)
 				return m, nil
 			}
+			prev := m.stateBeforeVideo
+			if prev == 0 {
+				prev = stateList
+			}
 			m.stopVideo()
-			m.state = stateList
+			if prev == stateSearch || prev == stateList {
+				m.state = prev
+			} else {
+				m.state = stateList
+			}
 			return m, tea.Batch(tea.ExitAltScreen, tea.ClearScreen)
 		}
 
@@ -373,6 +391,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			msg.vp.stop()
 			return m, nil
 		}
+		// stateBeforeVideo was captured when playback was requested; the loader
+		// state is not a place to return to.
 		m.video = msg.vp
 		m.state = stateVideoPlaying
 		return m, tea.Batch(tea.EnterAltScreen, nextFrame(m.video))

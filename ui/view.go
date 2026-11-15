@@ -39,6 +39,7 @@ var (
 	cursorStyle   = lipgloss.NewStyle().Foreground(mochaLavender)
 	scrollStyle   = lipgloss.NewStyle().Foreground(mochaBlue)
 	apiR34Style   = lipgloss.NewStyle().Foreground(mochaRed).Bold(true)
+	apiE621Style  = lipgloss.NewStyle().Foreground(mochaLavender).Bold(true)
 	apiSBStyle    = lipgloss.NewStyle().Foreground(mochaGreen).Bold(true)
 	apiPHStyle    = lipgloss.NewStyle().Foreground(mochaPeach).Bold(true)
 	apiXVStyle    = lipgloss.NewStyle().Foreground(mochaYellow).Bold(true)
@@ -127,6 +128,8 @@ func (m Model) apiLabel() string {
 	switch m.cfg.ActiveAPI {
 	case "rule34":
 		return apiR34Style.Render("[rule34]")
+	case "e621":
+		return apiE621Style.Render("[e621]")
 	case "pornhub":
 		return apiPHStyle.Render("[pornhub]")
 	case "xvideos":
@@ -250,6 +253,10 @@ func (m Model) View() string {
 		if m.cfg.ActiveAPI == "rule34" && m.cfg.APIKey == "" {
 			s += errorStyle.Render("   rule34 now requires an API key") + "\n"
 			s += dimStyle.Render(" make sure to get one from thier website, then use: ./r34-dl -apik") + "\n\n"
+		}
+		if m.cfg.ActiveAPI == "e621" && m.cfg.E621APIKey == "" {
+			s += errorStyle.Render("   e621 requires an API key") + "\n"
+			s += dimStyle.Render(" grab one from ur e621 profile, then use: ./r34-dl -e621k") + "\n\n"
 		}
 		if m.err != "" {
 			s += errorStyle.Render(safe.Text(m.err)) + "\n\n"
