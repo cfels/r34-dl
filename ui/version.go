@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,6 +14,8 @@ import (
 
 	"moxiu/r34-dl/safe"
 
+	"golang.org/x/mod/semver"
+
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -23,7 +26,7 @@ const (
 
 const (
 	releaseTimeout = 6 * time.Second
-	maxBodyBytes   = 64 << 10
+	maxBodyBytes   = 1 << 20
 	maxFieldChars  = 40
 	commitChars    = 7
 )
@@ -60,63 +63,31 @@ func (v versionInfo) label() string {
 	return "unknown"
 }
 
-func splitVersion(raw string) ([]int, string) {
-	core := raw
-	pre := ""
-	if idx := strings.IndexAny(raw, "-+"); idx >= 0 {
-		core, pre = raw[:idx], raw[idx+1:]
-	}
-	parts := strings.Split(core, ".")
-	nums := make([]int, 0, len(parts))
-	for _, part := range parts {
-		n := 0
-		for _, r := range part {
-			if r < '0' || r > '9' || n > 1_000_000 {
-				break
-			}
-			n = n*10 + int(r-'0')
-		}
-		nums = append(nums, n)
-	}
-	return nums, pre
+func versionNewer(latest, current string) bool {
+	latest, current = semVersion(latest), semVersion(current)
+	return semver.IsValid(latest) && semver.IsValid(current) && semver.Compare(latest, current) > 0
 }
 
-func versionNewer(latest, current string) bool {
-	latestNums, latestPre := splitVersion(latest)
-	currentNums, currentPre := splitVersion(current)
-	for i := 0; i < len(latestNums) || i < len(currentNums); i++ {
-		var l, c int
-		if i < len(latestNums) {
-			l = latestNums[i]
-		}
-		if i < len(currentNums) {
-			c = currentNums[i]
-		}
-		if l != c {
-			return l > c
-		}
+func semVersion(raw string) string {
+	core, suffix := raw, ""
+	if i := strings.IndexAny(raw, "-+"); i >= 0 {
+		core, suffix = raw[:i], raw[i:]
 	}
-	if latestPre == currentPre {
-		return false
+	for dots := strings.Count(core, "."); dots < 2; dots++ {
+		core += ".0"
 	}
-	if latestPre == "" {
-		return true
-	}
-	if currentPre == "" {
-		return false
-	}
-	return latestPre > currentPre
+	return "v" + core + suffix
 }
 
 func sameCommit(a, b string) bool {
-	if a == "" || b == "" {
+	if !validCommit(a) || !validCommit(b) {
 		return false
 	}
 	a, b = strings.ToLower(a), strings.ToLower(b)
 	return a == b || strings.HasPrefix(a, b) || strings.HasPrefix(b, a)
 }
 
-func releaseOutdated(client *http.Client, local, release versionInfo) bool {
+func releaseOutdated(ctx context.Context, client *http.Client, local, release versionInfo) bool {
 	if release.version == "" || release.version == "dev" {
 		return false
 	}
@@ -126,41 +97,25 @@ func releaseOutdated(client *http.Client, local, release versionInfo) bool {
 	if local.commit == "" || release.commit == "" || client == nil || sameCommit(local.commit, release.commit) {
 		return false
 	}
-	status, err := githubField(client,
-		compareCommitAPI+url.PathEscape(local.commit)+"..."+url.PathEscape(release.commit), "status")
+	// Compare's first page includes file patches; only the status is needed here.
+	status, err := githubField(ctx, client,
+		compareCommitAPI+url.PathEscape(local.commit)+"..."+url.PathEscape(release.commit)+"?page=2&per_page=1", "status")
 	if err != nil {
 		return false
 	}
 	return status == "ahead"
 }
 
-func sanitizeField(raw string, max int) string {
-	var b strings.Builder
-	for _, r := range raw {
-		if b.Len() >= max {
-			break
-		}
-		switch {
-		case r >= '0' && r <= '9',
-			r >= 'a' && r <= 'z',
-			r >= 'A' && r <= 'Z',
-			r == '.', r == '-', r == '_':
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
-}
-
 func normalizeVersion(raw string) string {
-	return strings.TrimLeft(sanitizeField(raw, maxFieldChars), "vV")
+	if raw == "dev" {
+		return raw
+	}
+	return taggedVersion(raw)
 }
 
 func taggedVersion(raw string) string {
-	version := normalizeVersion(raw)
-	if version == "" || version[0] < '0' || version[0] > '9' {
-		return ""
-	}
-	if strings.HasSuffix(version, ".") || strings.Contains(version, "..") || hasPseudoStamp(version) {
+	version := strings.TrimLeft(raw, "vV")
+	if len(version) > maxFieldChars || !semver.IsValid(semVersion(version)) || hasPseudoStamp(version) {
 		return ""
 	}
 	return version
@@ -182,11 +137,22 @@ func hasPseudoStamp(version string) bool {
 }
 
 func shortCommit(raw string) string {
-	sha := sanitizeField(raw, maxFieldChars)
-	if len(sha) > commitChars {
-		return sha[:commitChars]
+	if !validCommit(raw) {
+		return ""
 	}
-	return sha
+	return strings.ToLower(raw[:commitChars])
+}
+
+func validCommit(raw string) bool {
+	if len(raw) < commitChars || len(raw) > 40 {
+		return false
+	}
+	for _, r := range raw {
+		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f' || r >= 'A' && r <= 'F') {
+			return false
+		}
+	}
+	return true
 }
 
 func localVersionInfo() versionInfo {
@@ -211,8 +177,12 @@ func localVersionInfo() versionInfo {
 	return info
 }
 
-func githubField(client *http.Client, endpoint, field string) (string, error) {
-	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+func githubField(ctx context.Context, client *http.Client, endpoint, field string) (string, error) {
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Scheme != "https" || u.Host != "api.github.com" || u.User != nil {
+		return "", fmt.Errorf("refusing untrusted update endpoint")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return "", fmt.Errorf("build request: %w", err)
 	}
@@ -226,9 +196,12 @@ func githubField(client *http.Client, endpoint, field string) (string, error) {
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("github %s: %s", endpoint, resp.Status)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes+1))
 	if err != nil {
 		return "", fmt.Errorf("read github body: %w", err)
+	}
+	if len(body) > maxBodyBytes {
+		return "", fmt.Errorf("github response exceeds size limit")
 	}
 	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err != nil {
@@ -246,14 +219,11 @@ func fetchReleaseInfo() tea.Cmd {
 		if safe.SkipUpdateCheck() {
 			return releaseInfoMsg{err: fmt.Errorf("update check disabled")}
 		}
-		client := &http.Client{
-			Timeout: releaseTimeout,
-			Transport: &http.Transport{
-				Proxy:       http.ProxyFromEnvironment,
-				DialContext: safe.PublicDialContext(&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}),
-			},
-		}
-		tag, err := githubField(client, latestReleaseAPI, "tag_name")
+		ctx, cancel := context.WithTimeout(context.Background(), releaseTimeout)
+		defer cancel()
+		client := newReleaseClient()
+		defer client.CloseIdleConnections()
+		tag, err := githubField(ctx, client, latestReleaseAPI, "tag_name")
 		if err != nil {
 			return releaseInfoMsg{err: err}
 		}
@@ -261,23 +231,38 @@ func fetchReleaseInfo() tea.Cmd {
 		if info.version == "" {
 			return releaseInfoMsg{err: fmt.Errorf("latest release tag is not usable")}
 		}
-		sha, err := githubField(client, tagCommitAPI+url.PathEscape(sanitizeField(tag, maxFieldChars)), "sha")
+		sha, err := githubField(ctx, client, tagCommitAPI+url.PathEscape(tag), "sha")
 		if err == nil {
 			info.commit = shortCommit(sha)
 		}
-		return releaseInfoMsg{info: info, outdated: releaseOutdated(client, localVersionInfo(), info)}
+		return releaseInfoMsg{info: info, outdated: releaseOutdated(ctx, client, localVersionInfo(), info)}
+	}
+}
+
+func newReleaseClient() *http.Client {
+	return &http.Client{
+		Timeout: releaseTimeout,
+		Transport: &http.Transport{
+			Proxy:               http.ProxyFromEnvironment,
+			DialContext:         safe.PublicDialContext(&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}),
+			TLSHandshakeTimeout: 5 * time.Second,
+		},
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return fmt.Errorf("too many update redirects")
+			}
+			if req.URL.Scheme != "https" || req.URL.Host != "api.github.com" || req.URL.User != nil {
+				return fmt.Errorf("refusing update redirect outside GitHub HTTPS")
+			}
+			return nil
+		},
 	}
 }
 
 func mergeVersionInfo(local, release versionInfo) versionInfo {
 	info := local
-	fallback := release
-	if info.version == "" {
-		info = release
-		fallback = local
-	}
-	if info.commit == "" {
-		info.commit = fallback.commit
+	if info.version == "" && sameCommit(info.commit, release.commit) {
+		info.version = release.version
 	}
 	if info.version == "" {
 		info.version = "dev"

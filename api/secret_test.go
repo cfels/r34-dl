@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -66,5 +67,27 @@ func TestRule34ErrorsDoNotLeakCredentials(t *testing.T) {
 		if strings.Contains(err.Error(), userID) {
 			t.Errorf("%s error leaked the user id: %v", name, err)
 		}
+	}
+}
+
+func TestMediaCookiesCannotCrossPublicSuffixes(t *testing.T) {
+	for _, tt := range []struct{ source, target, domain string }{
+		{"https://attacker.com/", "https://www.pornhub.com/", "com"},
+		{"https://attacker.co.uk/", "https://victim.co.uk/", "co.uk"},
+	} {
+		jar := mediaClient().Jar
+		source, _ := url.Parse(tt.source)
+		target, _ := url.Parse(tt.target)
+		jar.SetCookies(source, []*http.Cookie{{Name: "test", Value: "example", Domain: tt.domain, Path: "/", Secure: true}})
+		if len(jar.Cookies(target)) != 0 {
+			t.Fatalf("cross-site cookie accepted for public suffix %q", tt.domain)
+		}
+	}
+	jar := mediaClient().Jar
+	source, _ := url.Parse("https://www.pornhub.com/")
+	target, _ := url.Parse("https://pornhub.com/")
+	jar.SetCookies(source, []*http.Cookie{{Name: "test", Value: "example", Domain: "pornhub.com", Path: "/", Secure: true}})
+	if len(jar.Cookies(target)) != 1 {
+		t.Fatal("legitimate same-site cookie was rejected")
 	}
 }

@@ -20,17 +20,6 @@ import (
 	"golang.org/x/term"
 )
 
-func readSecretLine(r *os.File) string {
-	if term.IsTerminal(int(r.Fd())) {
-		if data, err := term.ReadPassword(int(r.Fd())); err == nil {
-			return strings.TrimSpace(string(data))
-		}
-	}
-	reader := bufio.NewReader(r)
-	line, _ := reader.ReadString('\n')
-	return strings.TrimSpace(line)
-}
-
 func failureLine(id int, err error) string {
 	return fmt.Sprintf("failed #%d: %s", id, safe.Text(err.Error()))
 }
@@ -195,9 +184,10 @@ func main() {
 	}
 
 	if *addKey {
-		fmt.Print("paste ur full rule34 API key (e.g. &api_key=xxx&user_id=777): ")
-		raw := readSecretLine(os.Stdin)
-		fmt.Println()
+		raw, err := readSecretLine(os.Stdin, bufio.NewReader(os.Stdin), "paste ur full rule34 API key (e.g. &api_key=xxx&user_id=777): ")
+		if err != nil {
+			log.Fatalf("failed to read api key: %v", err)
+		}
 		if raw == "" {
 			log.Fatal("no creds provided")
 		}
@@ -235,18 +225,10 @@ func main() {
 		login, _ := reader.ReadString('\n')
 		login = strings.TrimSpace(login)
 
-		fmt.Print("paste ur e621 API key: ")
-		var rawKey string
-		if term.IsTerminal(int(os.Stdin.Fd())) {
-			data, err := term.ReadPassword(int(os.Stdin.Fd()))
-			if err != nil {
-				log.Fatalf("failed to read api key: %v", err)
-			}
-			rawKey = string(data)
-		} else {
-			rawKey, _ = reader.ReadString('\n')
+		rawKey, err := readSecretLine(os.Stdin, reader, "paste ur e621 API key: ")
+		if err != nil {
+			log.Fatalf("failed to read api key: %v", err)
 		}
-		fmt.Println()
 
 		apiKey := strings.TrimSpace(rawKey)
 		if login == "" || apiKey == "" {

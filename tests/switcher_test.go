@@ -101,6 +101,7 @@ func TestSwitcherSkipsAdultSitesWithoutAgeCheck(t *testing.T) {
 func TestSwitchPersistsToConfig(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", home)
+	t.Setenv("APPDATA", home)
 	h, _ := newSiteHarness(conf.Config{AgeVerified: true, ActiveAPI: "safebooru"}, "")
 	h.start(t)
 	h.press(t, "tab")

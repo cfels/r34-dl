@@ -17,6 +17,7 @@ import (
 
 	"github.com/kenshaw/rasterm"
 	xdraw "golang.org/x/image/draw"
+	_ "golang.org/x/image/webp"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -89,7 +90,7 @@ func scaleToPixels(img image.Image, maxPxW, maxPxH int) image.Image {
 		dstH = 1
 	}
 	dst := image.NewRGBA(image.Rect(0, 0, dstW, dstH))
-	xdraw.BiLinear.Scale(dst, dst.Bounds(), img, b, draw.Over, nil)
+	xdraw.CatmullRom.Scale(dst, dst.Bounds(), img, b, draw.Src, nil)
 	return dst
 }
 
@@ -125,6 +126,8 @@ var (
 	sixelPaletteOnce sync.Once
 	sixelPalette     color.Palette
 	sixelColorLUT    [1 << 15]uint8
+	sixelCubeDither  [256][64]uint8
+	sixelGreyDither  [256][64]uint8
 )
 
 // bayer8 spreads quantisation error so a small fixed palette doesn't band.
@@ -157,7 +160,7 @@ func sixelInitPalette() {
 		}
 	}
 	for i := 0; i < 40; i++ {
-		v := uint8(6 + i*6)
+		v := uint8((i + 1) * 255 / 41)
 		pal = append(pal, color.RGBA{v, v, v, 255})
 	}
 
@@ -181,16 +184,33 @@ func sixelInitPalette() {
 		}
 	}
 	sixelPalette = pal
-}
-
-func clamp5(v int) int {
-	if v < 0 {
-		return 0
+	for v := 0; v < 256; v++ {
+		low, high := 0, levels*levels*levels-1
+		for i, c := range flat {
+			if c.R != c.G || c.G != c.B {
+				continue
+			}
+			if int(c.R) <= v && c.R > flat[low].R {
+				low = i
+			}
+			if int(c.R) >= v && c.R < flat[high].R {
+				high = i
+			}
+		}
+		for threshold := 0; threshold < 64; threshold++ {
+			step := 255 / (levels - 1)
+			cube := v / step
+			if (v%step)*128 > (2*threshold+1)*step {
+				cube++
+			}
+			sixelCubeDither[v][threshold] = uint8(cube)
+			grey := low
+			if (v-int(flat[low].R))*128 > (2*threshold+1)*int(flat[high].R-flat[low].R) {
+				grey = high
+			}
+			sixelGreyDither[v][threshold] = uint8(grey)
+		}
 	}
-	if v > 31 {
-		return 31
-	}
-	return v
 }
 
 func sixelToPaletted(img *image.RGBA) *image.Paletted {
@@ -201,11 +221,17 @@ func sixelToPaletted(img *image.RGBA) *image.Paletted {
 		so := img.PixOffset(b.Min.X, y)
 		do := dst.PixOffset(b.Min.X, y)
 		for x := b.Min.X; x < b.Max.X; x++ {
-			d := (row[x&7] - 32) / 6
-			r := clamp5(int(img.Pix[so])>>3 + d)
-			g := clamp5(int(img.Pix[so+1])>>3 + d)
-			bl := clamp5(int(img.Pix[so+2])>>3 + d)
-			dst.Pix[do] = sixelColorLUT[r<<10|g<<5|bl]
+			d := row[x&7]
+			r, g, bl := int(img.Pix[so]), int(img.Pix[so+1]), int(img.Pix[so+2])
+			nearest := sixelColorLUT[(r>>3)<<10|(g>>3)<<5|bl>>3]
+			// Neutral colours use the finer grey ramp instead of the wider RGB steps.
+			if nearest >= sixelCubeLevels*sixelCubeLevels*sixelCubeLevels ||
+				nearest%(sixelCubeLevels*sixelCubeLevels+sixelCubeLevels+1) == 0 {
+				dst.Pix[do] = sixelGreyDither[(r+g+bl+1)/3][d]
+			} else {
+				dst.Pix[do] = sixelCubeDither[r][d]*sixelCubeLevels*sixelCubeLevels +
+					sixelCubeDither[g][d]*sixelCubeLevels + sixelCubeDither[bl][d]
+			}
 			so += 4
 			do++
 		}
@@ -353,17 +379,24 @@ func halfBlockEncode(img image.Image) (string, error) {
 	return buf.String(), nil
 }
 
+func checkPreview(data []byte) error {
+	cfg, format, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("decode image: %w", err)
+	}
+	if cfg.Width <= 0 || cfg.Height <= 0 {
+		return fmt.Errorf("image reports invalid dimensions %dx%d", cfg.Width, cfg.Height)
+	}
+	if previewTooLarge(format, cfg.Width, cfg.Height) {
+		return fmt.Errorf("image too large to preview (%dx%d)", cfg.Width, cfg.Height)
+	}
+	return nil
+}
+
 func renderImage(data []byte, termCols, termRows int) tea.Cmd {
 	return func() tea.Msg {
-		cfg, format, err := image.DecodeConfig(bytes.NewReader(data))
-		if err != nil {
-			return imageFetchedMsg{err: fmt.Errorf("decode image: %w", err)}
-		}
-		if cfg.Width <= 0 || cfg.Height <= 0 {
-			return imageFetchedMsg{err: fmt.Errorf("image reports invalid dimensions %dx%d", cfg.Width, cfg.Height)}
-		}
-		if previewTooLarge(format, cfg.Width, cfg.Height) {
-			return imageFetchedMsg{err: fmt.Errorf("image too large to preview (%dx%d)", cfg.Width, cfg.Height)}
+		if err := checkPreview(data); err != nil {
+			return imageFetchedMsg{err: err}
 		}
 		img, _, err := image.Decode(bytes.NewReader(data))
 		if err != nil {

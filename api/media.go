@@ -124,7 +124,7 @@ func (r *MediaRelay) mediaURL(rawURL string) string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if localPath := r.paths[rawURL]; localPath != "" {
-		return r.Proxy + localPath
+		return r.Proxy + (&url.URL{Path: localPath}).EscapedPath()
 	}
 	u, _ := url.Parse(rawURL)
 	ext := path.Ext(u.Path)
@@ -134,7 +134,7 @@ func (r *MediaRelay) mediaURL(rawURL string) string {
 	localPath := fmt.Sprintf("%s%d%s", r.prefix, len(r.urls), ext)
 	r.urls[localPath] = rawURL
 	r.paths[rawURL] = localPath
-	return r.Proxy + localPath
+	return r.Proxy + (&url.URL{Path: localPath}).EscapedPath()
 }
 
 func (r *MediaRelay) ServeHTTP(w http.ResponseWriter, req *http.Request) {

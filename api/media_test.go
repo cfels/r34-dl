@@ -215,3 +215,26 @@ func TestMediaRelayVerifiesTLSCertificates(t *testing.T) {
 		t.Fatalf("untrusted TLS certificate accepted: status=%d hits=%d", resp.StatusCode, hits.Load())
 	}
 }
+
+func TestMediaRelayEscapesUntrustedExtensions(t *testing.T) {
+	relay := &MediaRelay{
+		Proxy:  "http://127.0.0.1:12345",
+		prefix: "/test/",
+		urls:   make(map[string]string),
+		paths:  make(map[string]string),
+	}
+	for _, extension := range []string{".x%22%0A", ".x%3F", ".x%23", ".x%0D%0A"} {
+		raw := "https://cdn.example/media" + extension
+		target := relay.mediaURL(raw)
+		if strings.ContainsAny(target, "\"\r\n?#") {
+			t.Fatal("untrusted extension can break the generated playlist URL")
+		}
+		u, err := url.Parse(target)
+		if err != nil || relay.urls[u.Path] != raw {
+			t.Fatal("escaped URL does not resolve to its registered media path")
+		}
+		if cached := relay.mediaURL(raw); cached != target {
+			t.Fatal("cached URL is not escaped consistently")
+		}
+	}
+}

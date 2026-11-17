@@ -1,0 +1,93 @@
+name: Build release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version (for example v1.4.0)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Verify modules
+        run: go mod download && go mod verify
+
+      - name: Validate version
+        id: version
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          cat > "${RUNNER_TEMP}/release-version.go" <<'GO'
+          package main
+
+          import (
+            "fmt"
+            "os"
+            "strings"
+
+            "golang.org/x/mod/semver"
+          )
+
+          func main() {
+            version := strings.TrimPrefix(os.Getenv("VERSION"), "v")
+            if len(version) > 40 || !semver.IsValid("v" + version) {
+              fmt.Fprintln(os.Stderr, "provide a valid release version, such as v1.4.0")
+              os.Exit(1)
+            }
+            fmt.Printf("version=%s\n", version)
+          }
+          GO
+          go run "${RUNNER_TEMP}/release-version.go" >> "${GITHUB_OUTPUT}"
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race ./...
+
+      - name: Check vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
+      - name: Build release binaries
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          CGO_ENABLED: "0"
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for target in linux/amd64 linux/arm64 windows/amd64 windows/arm64; do
+            export GOOS="${target%/*}"
+            export GOARCH="${target#*/}"
+            extension=""
+            if [ "${GOOS}" = "windows" ]; then
+              extension=".exe"
+            fi
+            name="r34-dl-${VERSION}-${GOOS}-${GOARCH}${extension}"
+            go build -trimpath \
+              -ldflags "-s -w -X moxiu/r34-dl/ui.buildVersion=${VERSION} -X moxiu/r34-dl/ui.buildCommit=${GITHUB_SHA}" \
+              -o "dist/${name}" .
+            (cd dist && sha256sum "${name}" > "${name}.sha256")
+          done
+
+      - name: Upload release binaries
+        uses: actions/upload-artifact@v7
+        with:
+          name: r34-dl-${{ steps.version.outputs.version }}
+          path: dist/*
+          if-no-files-found: error

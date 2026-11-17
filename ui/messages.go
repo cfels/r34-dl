@@ -149,7 +149,7 @@ func fetchPreview(post api.Post) tea.Cmd {
 	if sample == file {
 		return fetchImagePreview([]string{sample})
 	}
-	return fetchImagePreview([]string{sample, file})
+	return fetchImagePreview([]string{file, sample})
 }
 
 func fetchImagePreview(urls []string) tea.Cmd {
@@ -161,6 +161,9 @@ func fetchImagePreview(urls []string) tea.Cmd {
 				continue
 			}
 			payload, err := loadImage(rawURL)
+			if err == nil {
+				err = checkPreview(payload)
+			}
 			if err == nil {
 				data = payload
 				break

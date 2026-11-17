@@ -1,6 +1,6 @@
 <div align="center">
 
-## 💕🌸💕 R34-DL 💕🌸💕
+# 💕🌸💕 R34-DL 💕🌸💕
 
 <img width="1920" height="1080" alt="fiut" src="https://github.com/user-attachments/assets/c7bbd1a6-0567-4647-9e49-243441c8002f" />
 
@@ -13,7 +13,7 @@ a rule34/safebooru downloader with alot of feature's, Why? cuz i didn't saw any 
 
 ### Features
 * typing predictions
-* 7 sites support (ph, xvids, xhamster, r34, e621, safebooru, e6)
+* 6 sites support (ph, xvids, xhamster, r34, e621, safebooru)
 * single and bulk content downloads
 * bulk download mode with `-b` (asks how many posts to grab, then walks the result pages)
 * image, gif and video previews rendered in terminal (`kitty` recommended for best quality and smooth playback)
@@ -48,7 +48,7 @@ you can download pre-built binary from [Release's](https://github.com/cfels/r34-
 or if u feeling like getting the latest dev build then download it off the TG channel: [t.me/r34_dl](https://t.me/r34_dl)
 
 ### Building
-Requires Go 1.26.9 or newer.
+Requires Go 1.26.11 or newer; builds use the patched Go 1.27.4 toolchain.
 
 ```
 go get
@@ -87,7 +87,7 @@ then type this command into your terminal:
 ```fish
 r34-dl -apik
 ```
-u will see prompt like this so just paste full API key block into it
+u will see prompt like this so just paste full API key block into it (input shows `*` instead of the key)
 ```
 paste ur full rule34 API key (e.g. &api_key=xxx&user_id=777): 
 ```

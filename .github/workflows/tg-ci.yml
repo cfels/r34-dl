@@ -12,7 +12,32 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Verify modules
+        run: go mod download && go mod verify
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race ./...
+
+      - name: Check vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
   publish:
+    needs: checks
     runs-on: ubuntu-latest
     container:
       image: archlinux:latest
@@ -20,9 +45,21 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - goarch: amd64
+          - goos: linux
+            goarch: amd64
+            platform: archlinux
             uname: x86_64
-          - goarch: arm64
+          - goos: linux
+            goarch: arm64
+            platform: archlinux
+            uname: aarch64
+          - goos: windows
+            goarch: amd64
+            platform: windows
+            uname: x86_64
+          - goos: windows
+            goarch: arm64
+            platform: windows
             uname: aarch64
 
     steps:
@@ -43,7 +80,6 @@ jobs:
         run: |
           set -euo pipefail
           git config --global --add safe.directory "${GITHUB_WORKSPACE}"
-          git config --global --add safe.directory '*'
           git status --short
 
       - name: Set up Go
@@ -58,13 +94,17 @@ jobs:
       - name: Build
         id: build
         env:
-          GOOS: linux
+          GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: "0"
         run: |
           set -euo pipefail
           short="${GITHUB_SHA:0:7}"
-          name="r34-dl-${short}-archlinux-${{ matrix.uname }}"
+          extension=""
+          if [ "${GOOS}" = "windows" ]; then
+            extension=".exe"
+          fi
+          name="r34-dl-${short}-${{ matrix.platform }}-${{ matrix.uname }}${extension}"
           out="${GITHUB_WORKSPACE}/dist/${name}"
           mkdir -p "${GITHUB_WORKSPACE}/dist"
           go build -trimpath \
@@ -94,7 +134,7 @@ jobs:
             exit 1
           fi
           digest="$(cut -d' ' -f1 "${ARTIFACT}.sha256")"
-          caption="${LABEL} build (archlinux/${{ matrix.uname }}) | commit: ${GITHUB_SHA} | sha256: ${digest}"
+          caption="${LABEL} build (${{ matrix.platform }}/${{ matrix.uname }}) | commit: ${GITHUB_SHA} | sha256: ${digest}"
           echo "caption: ${caption}"
           curl --fail-with-body --silent --show-error --retry 5 --retry-delay 5 --retry-connrefused \
             --request POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument" \

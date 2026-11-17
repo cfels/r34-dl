@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"moxiu/r34-dl/safe"
+
+	"golang.org/x/net/publicsuffix"
 )
 
 const browserUserAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36"
@@ -309,7 +311,7 @@ func clampPosts(posts []Post, limit int) []Post {
 }
 
 func mediaClient() *http.Client {
-	jar, err := cookiejar.New(nil)
+	jar, err := cookiejar.New(&cookiejar.Options{PublicSuffixList: publicsuffix.List})
 	if err != nil {
 		return newSiteHTTPClient()
 	}

@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,21 +13,11 @@ import (
 	"moxiu/r34-dl/conf"
 )
 
-func TestSanitizeFieldRejectsTerminalEscapes(t *testing.T) {
-	got := sanitizeField("\x1b]0;owned\x07v1.4 ; rm -rf /", maxFieldChars)
-	if strings.ContainsRune(got, 0x1b) {
-		t.Fatalf("escape byte survived sanitizing: %q", got)
-	}
-	for _, r := range got {
-		if r < 0x20 || r > 0x7e {
-			t.Fatalf("control rune %q survived sanitizing", r)
+func TestVersionFieldsRejectTerminalEscapes(t *testing.T) {
+	for _, raw := range []string{"\x1b]0;owned\x07v1.4", "1.4 ; rm -rf /", "1.4\n", strings.Repeat("1", maxFieldChars+1)} {
+		if taggedVersion(raw) != "" || shortCommit(raw) != "" {
+			t.Fatal("invalid version metadata was accepted")
 		}
-		if r == ' ' || r == ';' || r == '&' || r == '|' || r == '$' || r == '`' {
-			t.Fatalf("shell metacharacter %q survived sanitizing", r)
-		}
-	}
-	if len(got) > maxFieldChars {
-		t.Fatalf("sanitized field is %d chars, want at most %d", len(got), maxFieldChars)
 	}
 }
 
@@ -66,25 +58,25 @@ func TestShortCommit(t *testing.T) {
 	if got := shortCommit("33425d7ff9e2c1b0a1"); got != "33425d7" {
 		t.Errorf("shortCommit = %q, want 33425d7", got)
 	}
-	if got := shortCommit("abc"); got != "abc" {
-		t.Errorf("shortCommit = %q, want abc", got)
+	if got := shortCommit("abc"); got != "" {
+		t.Errorf("shortCommit = %q, want an empty invalid commit", got)
 	}
-	if got := shortCommit("\x1b[0m"); got != "0m" {
-		t.Errorf("shortCommit = %q, want 0m", got)
+	if got := shortCommit("\x1b[0m"); got != "" {
+		t.Errorf("shortCommit = %q, want an empty invalid commit", got)
 	}
 }
 
-func TestVersionInfoPullsReleaseInfoWhenBuildHasNoVersion(t *testing.T) {
+func TestVersionInfoDoesNotClaimAnUninstalledRelease(t *testing.T) {
 	m := Model{
 		version: versionInfo{commit: "33425d7"},
 		release: versionInfo{version: "1.3", commit: "ad6949c"},
 	}
 	got := m.versionInfo()
-	if got.version != "1.3" {
-		t.Errorf("version = %q, want the release tag when the build carries none", got.version)
+	if got.version != "dev" {
+		t.Errorf("version = %q, want dev for an untagged build", got.version)
 	}
-	if got.commit != "ad6949c" {
-		t.Errorf("commit = %q, want the commit of the latest release tag", got.commit)
+	if got.commit != "33425d7" {
+		t.Errorf("commit = %q, want the installed build's commit", got.commit)
 	}
 }
 
@@ -139,7 +131,7 @@ func TestBannerTextShowsArtAndVersionLine(t *testing.T) {
 	if !strings.Contains(got, "░▒▓█") {
 		t.Fatalf("banner art is missing:\n%s", got)
 	}
-	if !strings.Contains(got, "ver: 1.3 | commit: ad6949c") {
+	if !strings.Contains(got, "ver: dev | commit: unknown") {
 		t.Fatalf("banner version line is wrong:\n%s", got)
 	}
 	if want := m.versionLine(); !strings.Contains(got, want) {
@@ -162,6 +154,13 @@ func TestVersionNewer(t *testing.T) {
 		{"1.4-rc1", "1.4", false},
 		{"1.4-rc2", "1.4-rc1", true},
 		{"1.4.1", "1.4", true},
+		{"1.4.0-rc.10", "1.4.0-rc.2", true},
+		{"1.4.0-rc.2", "1.4.0-rc.10", false},
+		{"1.4.0+build.2", "1.4.0+build.1", false},
+		{"1.4.0-2", "1.4.0-alpha", false},
+		{"1.4.0-alpha.1", "1.4.0-alpha", true},
+		{"1.4broken", "1.3", false},
+		{"1.4", "unknown", false},
 	}
 	for _, c := range cases {
 		if got := versionNewer(c.latest, c.current); got != c.want {
@@ -199,7 +198,7 @@ func TestReleaseOutdatedForTaggedBuilds(t *testing.T) {
 		{versionInfo{version: "1.3"}, versionInfo{}, false},
 	}
 	for _, c := range cases {
-		if got := releaseOutdated(nil, c.local, c.release); got != c.want {
+		if got := releaseOutdated(context.Background(), nil, c.local, c.release); got != c.want {
 			t.Errorf("releaseOutdated(%+v, %+v) = %v, want %v", c.local, c.release, got, c.want)
 		}
 	}
@@ -207,7 +206,7 @@ func TestReleaseOutdatedForTaggedBuilds(t *testing.T) {
 
 func TestReleaseOutdatedForDevBuildsUsesCompare(t *testing.T) {
 	old := compareCommitAPI
-	compareCommitAPI = "https://github.test/repos/" + releasesRepo + "/compare/"
+	compareCommitAPI = "https://api.github.com/repos/" + releasesRepo + "/compare/"
 	t.Cleanup(func() { compareCommitAPI = old })
 
 	release := versionInfo{version: "1.4", commit: "bbbbbbb"}
@@ -229,7 +228,7 @@ func TestReleaseOutdatedForDevBuildsUsesCompare(t *testing.T) {
 		transport := &stubGithubTransport{status: c.status, code: c.code}
 		client := &http.Client{Transport: transport}
 		local := versionInfo{version: "dev", commit: c.commit}
-		if got := releaseOutdated(client, local, release); got != c.want {
+		if got := releaseOutdated(context.Background(), client, local, release); got != c.want {
 			t.Errorf("%s: releaseOutdated(%+v, %+v) = %v, want %v", c.name, local, release, got, c.want)
 		}
 		if c.want && !strings.Contains(transport.url, local.commit+"..."+release.commit) {
@@ -258,10 +257,10 @@ func (s *stubGithubTransport) RoundTrip(req *http.Request) (*http.Response, erro
 
 func TestReleaseOutdatedIgnoresDevBuildWithoutReleaseCommit(t *testing.T) {
 	local := versionInfo{version: "dev", commit: "aaaaaaa"}
-	if releaseOutdated(nil, local, versionInfo{version: "1.4"}) {
+	if releaseOutdated(context.Background(), nil, local, versionInfo{version: "1.4"}) {
 		t.Error("a dev build should not be called outdated without a release commit to compare")
 	}
-	if releaseOutdated(nil, versionInfo{version: "dev"}, versionInfo{version: "1.4", commit: "bbbbbbb"}) {
+	if releaseOutdated(context.Background(), nil, versionInfo{version: "dev"}, versionInfo{version: "1.4", commit: "bbbbbbb"}) {
 		t.Error("a build without a commit should not be called outdated")
 	}
 }
@@ -349,5 +348,88 @@ func TestReleaseInfoMsgDrivesUpdateNotice(t *testing.T) {
 	}
 	if !got.outdated || got.release.version != "1.4" {
 		t.Errorf("model release state = %+v outdated=%v, want the release flagged as outdated", got.release, got.outdated)
+	}
+}
+
+type githubTransportFunc func(*http.Request) (*http.Response, error)
+
+func (fn githubTransportFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
+}
+
+func TestUpdateClientRejectsUntrustedRedirects(t *testing.T) {
+	for _, target := range []string{
+		"http://api.github.com/repos/cfels/r34-dl/releases/latest",
+		"https://api.github.com.evil.example/releases/latest",
+		"https://evil.example/releases/latest",
+		"http://127.0.0.1/private",
+		"https://user@api.github.com/releases/latest",
+	} {
+		t.Run(target, func(t *testing.T) {
+			hits := 0
+			client := newReleaseClient()
+			client.Transport = githubTransportFunc(func(req *http.Request) (*http.Response, error) {
+				hits++
+				return &http.Response{
+					StatusCode: http.StatusFound,
+					Header:     http.Header{"Location": {target}},
+					Body:       io.NopCloser(strings.NewReader("")),
+					Request:    req,
+				}, nil
+			})
+			if _, err := githubField(context.Background(), client, latestReleaseAPI, "tag_name"); err == nil || hits != 1 {
+				t.Fatalf("unsafe redirect followed: hits=%d err=%v", hits, err)
+			}
+		})
+	}
+}
+
+func TestGithubFieldRejectsUntrustedEndpoints(t *testing.T) {
+	client := &http.Client{Transport: githubTransportFunc(func(*http.Request) (*http.Response, error) {
+		t.Fatal("untrusted endpoint reached the transport")
+		return nil, errors.New("unreachable")
+	})}
+	for _, endpoint := range []string{"http://api.github.com/", "https://evil.example/", "file:///private"} {
+		if _, err := githubField(context.Background(), client, endpoint, "tag_name"); err == nil {
+			t.Fatalf("accepted update endpoint %q", endpoint)
+		}
+	}
+}
+
+func TestGithubFieldBoundsResponseSize(t *testing.T) {
+	for _, size := range []int{128 << 10, maxBodyBytes + 1} {
+		client := &http.Client{Transport: githubTransportFunc(func(req *http.Request) (*http.Response, error) {
+			body := `{"tag_name":"v1.4","body":"` + strings.Repeat("a", size) + `"}`
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header), Request: req}, nil
+		})}
+		got, err := githubField(context.Background(), client, latestReleaseAPI, "tag_name")
+		if size < maxBodyBytes && (err != nil || got != "v1.4") {
+			t.Fatalf("normal release body rejected: %v", err)
+		}
+		if size > maxBodyBytes && (err == nil || !strings.Contains(err.Error(), "limit")) {
+			t.Fatalf("oversized release body accepted: %v", err)
+		}
+	}
+}
+
+func TestGithubFieldHonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	client := &http.Client{Transport: githubTransportFunc(func(req *http.Request) (*http.Response, error) {
+		return nil, req.Context().Err()
+	})}
+	if _, err := githubField(ctx, client, latestReleaseAPI, "tag_name"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation was not propagated: %v", err)
+	}
+}
+
+func TestVersionInfoOnlyUsesReleaseTagForMatchingCommit(t *testing.T) {
+	got := mergeVersionInfo(versionInfo{commit: "abcdef1"}, versionInfo{version: "1.4", commit: "abcdef123456"})
+	if got.version != "1.4" || got.commit != "abcdef1" {
+		t.Fatalf("matching build metadata = %+v", got)
+	}
+	got = mergeVersionInfo(versionInfo{version: "1.3"}, versionInfo{version: "1.4", commit: "abcdef1"})
+	if got.version != "1.3" || got.commit != "unknown" {
+		t.Fatalf("release commit was attributed to a different installed build: %+v", got)
 	}
 }

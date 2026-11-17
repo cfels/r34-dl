@@ -1,6 +1,8 @@
 module moxiu/r34-dl
 
-go 1.26.9
+go 1.26.11
+
+toolchain go1.27.4
 
 require (
 	github.com/charmbracelet/bubbletea v1.3.10
@@ -8,7 +10,9 @@ require (
 	github.com/charmbracelet/x/ansi v0.10.1
 	github.com/kenshaw/rasterm v0.1.17
 	golang.org/x/image v0.45.0
-	golang.org/x/term v0.44.0
+	golang.org/x/mod v0.42.0
+	golang.org/x/net v0.62.0
+	golang.org/x/term v0.47.0
 )
 
 require (
@@ -28,6 +32,6 @@ require (
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/soniakeys/quant v1.0.0 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
-	golang.org/x/sys v0.47.0 // indirect
-	golang.org/x/text v0.41.0 // indirect
+	golang.org/x/sys v0.49.0 // indirect
+	golang.org/x/text v0.43.0 // indirect
 )

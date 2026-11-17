@@ -5,9 +5,17 @@ import (
 	"encoding/base64"
 	"fmt"
 	"image"
+	"image/color"
+	"image/draw"
 	"image/png"
+	"net/http"
+	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
+
+	"moxiu/r34-dl/api"
+	"moxiu/r34-dl/safe"
 
 	"github.com/kenshaw/rasterm"
 )
@@ -248,5 +256,106 @@ func TestKittyChunksCarryFullFrame(t *testing.T) {
 	}
 	if chunks := strings.Count(s, "\x1b_G"); chunks < 2 {
 		t.Errorf("frame used %d kitty chunks, want the png split over several", chunks)
+	}
+}
+
+func TestSixelPaletteColorsStaySolid(t *testing.T) {
+	sixelPaletteOnce.Do(sixelInitPalette)
+	for i, c := range sixelPalette {
+		img := image.NewRGBA(image.Rect(0, 0, 8, 8))
+		draw.Draw(img, img.Bounds(), image.NewUniform(c), image.Point{}, draw.Src)
+		got := sixelToPaletted(img)
+		for y := 0; y < 8; y++ {
+			for x := 0; x < 8; x++ {
+				if got.At(x, y) != c {
+					t.Fatalf("palette colour %d at %d,%d = %v, want %v", i, x, y, got.At(x, y), c)
+				}
+			}
+		}
+	}
+}
+
+func TestSixelGreyDitherStaysWithinRampStep(t *testing.T) {
+	sixelPaletteOnce.Do(sixelInitPalette)
+	for v := 0; v <= 255; v++ {
+		img := image.NewRGBA(image.Rect(3, 5, 11, 13))
+		draw.Draw(img, img.Bounds(), image.NewUniform(color.Gray{Y: uint8(v)}), image.Point{}, draw.Src)
+		got := sixelToPaletted(img)
+		sum := 0
+		for y := 5; y < 13; y++ {
+			for x := 3; x < 11; x++ {
+				c := got.At(x, y).(color.RGBA)
+				diff := int(c.R) - v
+				if c.R != c.G || c.G != c.B || diff < -7 || diff > 7 {
+					t.Fatalf("grey %d dithered to %v", v, c)
+				}
+				sum += int(c.R)
+			}
+		}
+		if diff := sum - v*64; diff < -32 || diff > 32 {
+			t.Fatalf("grey %d has average brightness %.2f", v, float64(sum)/64)
+		}
+	}
+}
+
+func BenchmarkSixelToPaletted(b *testing.B) {
+	sixelPaletteOnce.Do(sixelInitPalette)
+	img := testGradient(800, 450)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		sixelToPaletted(img)
+	}
+}
+
+func TestFetchPreviewPrefersOriginal(t *testing.T) {
+	t.Setenv(safe.AllowPrivateHostsEnv, "1")
+	var original, sample bytes.Buffer
+	if err := png.Encode(&original, testGradient(64, 48)); err != nil {
+		t.Fatal(err)
+	}
+	if err := png.Encode(&sample, testGradient(16, 12)); err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name   string
+		status int
+		data   []byte
+		want   []byte
+		paths  []string
+	}{
+		{"original", http.StatusOK, original.Bytes(), original.Bytes(), []string{"/original"}},
+		{"unavailable original", http.StatusNotFound, nil, sample.Bytes(), []string{"/original", "/sample"}},
+		{"oversized original", http.StatusOK, pngWithDims(40000, 40000), sample.Bytes(), []string{"/original", "/sample"}},
+		{"unsupported original", http.StatusOK, []byte("unsupported"), sample.Bytes(), []string{"/original", "/sample"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			requests := make(chan string, 2)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests <- r.URL.Path
+				if r.URL.Path == "/original" {
+					w.WriteHeader(tt.status)
+					_, _ = w.Write(tt.data)
+					return
+				}
+				_, _ = w.Write(sample.Bytes())
+			}))
+			defer server.Close()
+			post := api.Post{FileURL_: server.URL + "/original", SampleURL: server.URL + "/sample"}
+			msg := fetchPreview(post)().(imageFetchedMsg)
+			if msg.err != nil {
+				t.Fatal(msg.err)
+			}
+			if !bytes.Equal(msg.data, tt.want) {
+				t.Fatal("fetched the wrong preview")
+			}
+			var paths []string
+			for len(requests) > 0 {
+				paths = append(paths, <-requests)
+			}
+			if !reflect.DeepEqual(paths, tt.paths) {
+				t.Fatalf("requests = %v, want %v", paths, tt.paths)
+			}
+		})
 	}
 }

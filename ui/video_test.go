@@ -1,8 +1,10 @@
 package ui
 
 import (
+	"bytes"
 	"fmt"
 	"image"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -105,10 +107,12 @@ func testMediaURL(path string) string {
 
 func TestMain(m *testing.M) {
 	os.Setenv(safe.AllowPrivateHostsEnv, "1")
+	videoFrameOut = io.Discard
 	configDir := ""
 	if dir, err := os.MkdirTemp("", "r34-dl-testcfg"); err == nil {
 		configDir = dir
 		os.Setenv("XDG_CONFIG_HOME", dir)
+		os.Setenv("APPDATA", dir)
 	}
 	code := m.Run()
 	if root := testMediaRoot(); root != "" {
@@ -714,6 +718,10 @@ func TestGIFKeepsLooping(t *testing.T) {
 }
 
 func TestVideoViewerRendersEveryFrame(t *testing.T) {
+	var painted bytes.Buffer
+	originalOutput := videoFrameOut
+	videoFrameOut = &painted
+	t.Cleanup(func() { videoFrameOut = originalOutput })
 	vp, err := startVideoPlayer(videoPost(makeTestVideo(t, 30, 3)), 80, 24, videoOptions{})
 	if err != nil {
 		t.Fatalf("startVideoPlayer: %v", err)
@@ -734,6 +742,7 @@ func TestVideoViewerRendersEveryFrame(t *testing.T) {
 	for len(pending) > 0 && time.Now().Before(deadline) {
 		cmd := pending[0]
 		pending = pending[1:]
+		painted.Reset()
 		msg := cmd()
 		if batch, ok := msg.(tea.BatchMsg); ok {
 			pending = append(pending, batch...)
@@ -746,9 +755,17 @@ func TestVideoViewerRendersEveryFrame(t *testing.T) {
 		}
 		switch msg := msg.(type) {
 		case videoRenderedMsg:
-			rendered[msg.s] = true
-			if !strings.Contains(m.View(), strings.TrimSuffix(msg.s, "\n")) {
-				t.Fatal("rendered frame is not what the viewer shows")
+			if sixelVideoTerminal() {
+				frame := painted.String()
+				if !strings.Contains(frame, "\x1bP") {
+					t.Fatal("rendered frame was not painted to the terminal")
+				}
+				rendered[frame] = true
+			} else {
+				rendered[msg.s] = true
+				if !strings.Contains(m.View(), strings.TrimSuffix(msg.s, "\n")) {
+					t.Fatal("rendered frame is not what the viewer shows")
+				}
 			}
 		case videoDoneMsg:
 			if msg.err != nil {

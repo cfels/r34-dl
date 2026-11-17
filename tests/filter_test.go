@@ -64,6 +64,7 @@ func TestSearchUsesAIFilter(t *testing.T) {
 func TestAIFilterTogglePersistsAndShows(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", home)
+	t.Setenv("APPDATA", home)
 	h := newHarness(conf.Config{
 		AgeVerified: true,
 		ActiveAPI:   "rule34",

@@ -155,7 +155,7 @@ func startStreamPlayer(stream api.Stream, post api.Post, termCols, termRows int,
 	srcW, srcH := post.Width, post.Height
 	w, h := videoFitSize(termCols, termRows, srcW, srcH)
 	scale := fmt.Sprintf(
-		"scale=%d:%d:force_original_aspect_ratio=decrease,"+
+		"scale=%d:%d:force_original_aspect_ratio=decrease:flags=lanczos+accurate_rnd+full_chroma_int,"+
 			"pad=%d:%d:(ow-iw)/2:(oh-ih)/2:color=black",
 		w, h, w, h,
 	)

@@ -13,6 +13,7 @@ func TestMain(m *testing.M) {
 			os.Setenv("XDG_CONFIG_HOME", dir)
 		}
 	}
+	os.Setenv("APPDATA", os.Getenv("XDG_CONFIG_HOME"))
 	code := m.Run()
 	if configDir != "" {
 		os.RemoveAll(configDir)
